@@ -10,7 +10,7 @@ export DIST_DIR="$APP_HOME/dist"             # 前端静态文件（nginx root�
 export LOG_DIR="$APP_HOME/logs"              # 日志目录
 
 # ===== 仓库与服务 =====
-export REPO_URL="https://gitee.com/superBigHuang/teacher_workspace.git"
+export REPO_URL="git@gitee.com:superBigHuang/teacher_workspace.git"
 export BACKEND_PORT=8088
 export SERVICE_NAME="teacher-backend"
 
