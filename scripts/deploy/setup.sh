@@ -14,16 +14,18 @@ apt-get update -qq
 apt-get install -y -qq mysql-server nginx git >/dev/null
 
 log "2/6 配置 MySQL root 密码为 root（与 application.yml 一致，库由后端自动创建）..."
-if ! mysql -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
-  mysql <<'SQL'
+systemctl enable --now mysql >/dev/null
+# 注意：MySQL 8 的 root 默认 auth_socket，系统 root 走 socket 免密即可登录，
+# 但后端经 TCP(3306) 用 root/root 连接必须要有密码。此处无条件设置（幂等）。
+mysql <<'SQL'
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';
 FLUSH PRIVILEGES;
 SQL
-  log "MySQL root 密码已设置"
+if mysql -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
+  log "MySQL root/root 就绪（TCP 可连）"
 else
-  log "MySQL root/root 已可用，跳过"
+  err "MySQL root 密码设置失败"; exit 1
 fi
-systemctl enable --now mysql >/dev/null
 
 log "3/6 克隆代码到 $APP_DIR ..."
 mkdir -p "$APP_HOME"

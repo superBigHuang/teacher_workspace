@@ -14,10 +14,13 @@ export REPO_URL="git@gitee.com:superBigHuang/teacher_workspace.git"
 export BACKEND_PORT=8088
 export SERVICE_NAME="teacher-backend"
 
-# ===== 工具链（vfox 管理；若已在 PATH 则回退使用命令本身）=====
-export JAVA_BIN="${JAVA_BIN:-$HOME/.vfox/sdks/java/bin/java}"
-export MVN_BIN="${MVN_BIN:-$HOME/.vfox/sdks/maven/bin/mvn}"
-export NPM_BIN="${NPM_BIN:-$HOME/.vfox/sdks/nodejs/bin/npm}"
+# ===== 工具链（vfox 管理）=====
+# 脚本自包含：不依赖登录 shell 的 profile.d，直接导出 JAVA_HOME 与 PATH
+export JAVA_HOME="$HOME/.vfox/sdks/java"
+export PATH="$JAVA_HOME/bin:$HOME/.vfox/sdks/maven/bin:$HOME/.vfox/sdks/nodejs/bin:$PATH"
+export JAVA_BIN="$JAVA_HOME/bin/java"
+export MVN_BIN="$HOME/.vfox/sdks/maven/bin/mvn"
+export NPM_BIN="$HOME/.vfox/sdks/nodejs/bin/npm"
 
 mkdir -p "$LOG_DIR"
 
