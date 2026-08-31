@@ -34,6 +34,8 @@ if [ -d "$APP_DIR/.git" ]; then
 else
   git clone "$REPO_URL" "$APP_DIR"
 fi
+# 忽略文件权限位变化（chmod 不影响 git 状态，避免 pull 被本地 mode 改动阻塞）
+git -C "$APP_DIR" config core.fileMode false
 
 log "4/6 注册 systemd 后端服务..."
 sed -e "s#__APP_HOME__#$APP_HOME#g" \

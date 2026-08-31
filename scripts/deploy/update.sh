@@ -8,6 +8,7 @@ source "$(dirname "$0")/env.sh"
 
 log "拉取最新代码（git pull）..."
 cd "$APP_DIR"
+git config core.fileMode false
 git pull
 
 log "重新构建..."
