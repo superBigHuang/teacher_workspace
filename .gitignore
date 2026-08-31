@@ -1,0 +1,46 @@
+# ===== 临时 / 服务器运维脚本（不纳入项目）=====
+tmp/
+
+# ===== Java / Maven（后端）=====
+backend/target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+
+# ===== Node / Vite（前端）=====
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.npm/
+*.tsbuildinfo
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== Playwright / e2e 测试产物 =====
+test-results/
+playwright-report/
+e2e/test-results/
+e2e/playwright-report/
+
+# ===== IDE / 编辑器 =====
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地环境覆盖配置（按需）=====
+application-local.yml
+application-local.properties

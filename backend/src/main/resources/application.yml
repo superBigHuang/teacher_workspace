@@ -1,0 +1,32 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: teacher-workplatform
+  datasource:
+    # 直接指定库名；createDatabaseIfNotExist=true 使库不存在时驱动自动建库，
+    # 并保证连接池中每个连接都有默认库（否则仅 schema.sql 那条连接 USE 过库，新连接会报 No database selected）
+    url: jdbc:mysql://localhost:3306/teacher_workspace?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      encoding: UTF-8
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+app:
+  jwt:
+    # 生产环境请更换为随机长串
+    secret: teacher-workplatform-secret-key-change-me-0123456789abcdef
+    expire-hours: 72
+
+logging:
+  level:
+    com.teacher.platform: info
