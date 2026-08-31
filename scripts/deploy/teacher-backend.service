@@ -1,0 +1,16 @@
+[Unit]
+Description=Teacher Workplatform Backend (Spring Boot)
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__APP_HOME__
+ExecStart=__JAVA_BIN__ -jar -Xms128m -Xmx512m -Duser.timezone=Asia/Shanghai __JAR_PATH__
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:__LOG_DIR__/backend.log
+StandardError=append:__LOG_DIR__/backend.log
+
+[Install]
+WantedBy=multi-user.target
