@@ -34,7 +34,7 @@ public class SeatController {
     public Result<Map<String, Object>> config() {
         Long cid = homeroomClassId();
         List<Map<String, Object>> list = jdbc.queryForList(
-                "SELECT rows,cols,aisles FROM seat_config WHERE class_id=?", cid);
+                "SELECT `rows`,cols,aisles FROM seat_config WHERE class_id=?", cid);
         if (list.isEmpty()) {
             return Result.ok(Map.of("rows", 7, "cols", 8, "aisles", List.of(2, 4, 6)));
         }
@@ -52,9 +52,9 @@ public class SeatController {
                 .replace("[", "").replace("]", "").replace(" ", "");
         Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM seat_config WHERE class_id=?", Integer.class, cid);
         if (cnt == 0) {
-            jdbc.update("INSERT INTO seat_config(class_id,rows,cols,aisles) VALUES(?,?,?,?)", cid, rows, cols, aisles);
+            jdbc.update("INSERT INTO seat_config(class_id,`rows`,cols,aisles) VALUES(?,?,?,?)", cid, rows, cols, aisles);
         } else {
-            jdbc.update("UPDATE seat_config SET rows=?,cols=?,aisles=? WHERE class_id=?", rows, cols, aisles, cid);
+            jdbc.update("UPDATE seat_config SET `rows`=?,cols=?,aisles=? WHERE class_id=?", rows, cols, aisles, cid);
         }
         return Result.ok();
     }
@@ -185,7 +185,7 @@ public class SeatController {
     private void saveConfigCurrent(Long cid) {
         Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM seat_config WHERE class_id=?", Integer.class, cid);
         if (cnt == 0) {
-            jdbc.update("INSERT INTO seat_config(class_id,rows,cols,aisles) VALUES(?,?,?,?)", cid, 7, 8, "2,4,6");
+            jdbc.update("INSERT INTO seat_config(class_id,`rows`,cols,aisles) VALUES(?,?,?,?)", cid, 7, 8, "2,4,6");
         }
     }
 
