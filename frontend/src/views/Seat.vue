@@ -47,17 +47,29 @@
 
     <div class="podium">🏫 讲台</div>
 
-    <div class="seat-grid" :style="gridStyle">
-      <div v-for="aisleCol in aisleDisplayColumns" :key="'a'+aisleCol"
-           class="aisle-gutter" :style="{ gridColumn: aisleCol }"></div>
+    <!-- 座位棋盘：左列行名、顶行列名（都在格子外）；格子内只放宠物，名字竖排贴格子左侧 -->
+    <div class="board-grid" :style="boardGridStyle">
+      <!-- 列名（讲台下方） -->
+      <div class="board-corner"></div>
+      <div v-for="c in cols" :key="'col'+c" class="col-label"
+           :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
+      <div v-for="aisleCol in aisleDisplayColumns" :key="'al'+aisleCol" class="col-label aisle-label"
+           :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
+      <!-- 行名（每行左侧） -->
+      <div v-for="r in rows" :key="'row'+r" class="row-label"
+           :style="{ gridRow: r + 1, gridColumn: 1 }">第{{ r }}排</div>
+      <!-- 过道（贯穿所有排） -->
+      <div v-for="aisleCol in aisleDisplayColumns" :key="'ag'+aisleCol" class="aisle-gutter"
+           :style="{ gridRow: `2 / ${rows + 2}`, gridColumn: aisleCol + 1 }"></div>
+      <!-- 座位 -->
       <div v-for="s in seats" :key="s.row + '-' + s.col"
            class="seat" :class="seatClass(s)"
-           :style="{ gridRow: s.row, gridColumn: displayCol(s.col) }"
+           :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }"
            :draggable="!!s.studentId && !batchMode"
            @dragstart="onDragStart($event, s)" @dragover.prevent @drop="onDrop($event, s)"
            @pointerdown="onSeatDown($event, s)" @pointerup="onSeatUp($event)">
         <template v-if="s.studentId">
-          <!-- 宠物区：宠物"坐"在座位上 -->
+          <span class="seat-name-v">{{ s.name }}</span>
           <div class="seat-pet">
             <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(s.studentId)"
               @click.stop @change="togglePick(s.studentId)" />
@@ -70,13 +82,7 @@
               :src="petImg(petOf(s))" alt="宠物">
             <span v-for="f in floatsOf(s.studentId)" :key="f.id" class="float-score"
               :class="f.good ? 'good' : 'bad'">{{ f.text }}</span>
-            <div v-if="petOf(s)?.petId" class="seat-lv"><span class="lv-badge">Lv.{{ petOf(s).level }}</span></div>
-            <div v-if="petOf(s)?.petId && petOf(s).level < 5" class="seat-exp">
-              <div class="seat-exp-fill" :style="{ width: expPct(petOf(s)) + '%' }"></div>
-            </div>
           </div>
-          <div class="seat-name">{{ s.name }}</div>
-          <div class="seat-pos">第{{ s.row }}排{{ s.col }}座</div>
         </template>
         <template v-else><div class="empty">— 空 —</div></template>
       </div>
@@ -147,6 +153,9 @@
             </div>
           </div>
         </div>
+
+        <!-- 成长进度条（座位格上不显示等级/进度，统一收进详情） -->
+        <div class="detail-exp"><div class="detail-exp-fill" :style="{ width: expPct(detailStudent) + '%' }"></div></div>
 
         <div class="log-title">📖 最近成长流水</div>
         <div class="log-list">
@@ -326,9 +335,10 @@ const aisles = computed(() =>
 
 // 过道在网格中的显示列号：逻辑列 c 之后插入，显示列 = c + 前面过道数 + 1（过道占该列）
 const totalDisplayCols = computed(() => cols.value + aisles.value.length)
-const gridStyle = computed(() => ({
-  gridTemplateColumns: `repeat(${totalDisplayCols.value}, 1fr)`,
-  gridTemplateRows: `repeat(${rows.value}, auto)`
+// 棋盘网格：左侧多一列行名（40px）、顶部多一行列名（30px），座位坐标整体 +1
+const boardGridStyle = computed(() => ({
+  gridTemplateColumns: `40px repeat(${totalDisplayCols.value}, minmax(0, 1fr))`,
+  gridTemplateRows: `30px repeat(${rows.value}, auto)`
 }))
 // 过道 gutter 所在显示列
 const aisleDisplayColumns = computed(() =>
@@ -443,36 +453,48 @@ function onSeatUp(e) {
   background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
   font-weight: 800; font-size: 17px; padding: 14px; border-radius: 12px; margin-bottom: 16px;
 }
-.seat-grid { display: grid; gap: 10px; }
+/* 座位棋盘：左列行名、顶行列名 */
+.board-grid { display: grid; gap: 10px; }
+.board-corner { grid-row: 1; grid-column: 1; }
+.col-label {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: #a08a78;
+}
+.col-label.aisle-label { color: #c3b8a8; font-weight: 700; }
+.row-label {
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 3px;
+  font-size: 12px; font-weight: 800; color: #a08a78;
+}
 .aisle-gutter { min-width: 18px; }
 
-/* 座位卡：宠物"坐"在座位上 */
+/* 座位卡：格子内只放宠物，名字竖排贴左 */
 .seat {
-  border-radius: 12px; padding: 6px 4px; text-align: center; min-height: 136px;
-  cursor: grab; display: flex; flex-direction: column; align-items: center;
+  position: relative; border-radius: 12px; padding: 6px 4px; text-align: center; min-height: 168px;
+  cursor: grab; display: flex; align-items: center; justify-content: center;
 }
 .seat.boy { background: #e3eefc; border: 2px solid #b9d6f7; color: #3a6ea5; }
 .seat.girl { background: #fde4ee; border: 2px solid #f7c3d8; color: #c2568a; }
 .seat.empty-seat { background: #f7f8fc; border: 2px dashed #e3e6f0; color: #c0c4d0; display: flex; align-items: center; justify-content: center; }
-.seat-pet { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; }
-.seat-pet-img { width: 52px; height: 52px; object-fit: contain; }
+.seat-name-v {
+  position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;
+  font-size: 14px; font-weight: 800; z-index: 2;
+}
+.seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
+.seat-pet-img { width: 96px; height: 96px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
 .seat-pet-img.dizzy { animation: pet-shake .5s ease-in-out infinite; }
 .seat-pet-img.frozen { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 6px rgba(120,190,255,.8)); }
 .seat-pet-img.broken { filter: grayscale(.9) contrast(.92); }
-.seat-flag { position: absolute; top: -4px; right: 14px; font-size: 14px; z-index: 2; }
-.seat-flag.flag-fz { top: 12px; }
-.seat-flag.flag-bk { top: 26px; right: 14px; }
+.seat-flag { position: absolute; top: -6px; right: 16px; font-size: 16px; z-index: 2; }
+.seat-flag.flag-fz { top: 14px; }
+.seat-flag.flag-bk { top: 32px; right: 16px; }
 .seat-flag.flag-grad {
-  right: 6px; top: -6px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
+  right: 8px; top: -8px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
   border-radius: 9px; padding: 0 5px; font-size: 10px; font-weight: 800;
 }
-.seat-lv { margin-top: 1px; line-height: 1; }
-.seat-exp { width: 78%; height: 5px; border-radius: 4px; background: rgba(120,90,60,.12); margin-top: 4px; overflow: hidden; }
-.seat-exp-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #ffd98a, #ff9f5a); transition: width .4s; }
-.seat-name { font-size: 15px; font-weight: 800; margin-top: 4px; }
-.seat-pos { font-size: 10px; opacity: .65; margin-top: 1px; }
 .empty { font-size: 14px; }
 
 /* 未排座学生宠物卡区 */
@@ -548,7 +570,9 @@ function onSeatUp(e) {
 
 /* 详情弹窗 */
 .detail-head { display: flex; gap: 16px; align-items: center; }
-.detail-img { width: 120px; height: 120px; object-fit: contain; filter: drop-shadow(0 6px 10px rgba(220,160,110,.35)); }
+.detail-img { width: 120px; height: 120px; object-fit: contain; animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 6px 10px rgba(220,160,110,.35)); }
+.detail-exp { height: 12px; border-radius: 8px; background: #ffe2c8; margin: 14px 4px 4px; overflow: hidden; }
+.detail-exp-fill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, #ffd98a, #ff9f5a); transition: width .4s; }
 .detail-info { flex: 1; }
 .detail-name { font-size: 19px; font-weight: 800; color: #8a5a34; margin-bottom: 8px; }
 .detail-line { font-size: 13px; color: #9a7a5c; margin: 5px 0; }
