@@ -33,7 +33,11 @@
         <div class="day-card" :style="{ '--c': dayColors[i] }">
           <div class="day-title">{{ d }}</div>
           <div v-for="r in (roster[i + 1] || [])" :key="r.rosterId" class="duty-person">
-            {{ r.name }} <el-icon class="x" @click="removeRoster(r.rosterId)"><Close /></el-icon>
+            <span class="dp-name">{{ r.name }}</span>
+            <el-tag size="small" effect="plain" class="dp-task" :type="r.taskName ? 'success' : 'info'">
+              {{ r.taskName || '未分配' }}
+            </el-tag>
+            <el-icon class="x" @click="removeRoster(r.rosterId)"><Close /></el-icon>
           </div>
           <div class="day-foot">小组自行分配工作</div>
         </div>
@@ -63,6 +67,11 @@
         <el-form-item label="学生">
           <el-select v-model="addForm.studentId" filterable style="width:100%">
             <el-option v-for="s in students" :key="s.id" :label="s.name + '（' + s.stu_no + '）'" :value="s.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="任务">
+          <el-select v-model="addForm.taskId" placeholder="选择值日事项（干什么）" style="width:100%">
+            <el-option v-for="t in tasks" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -111,7 +120,7 @@ const committee = ref([])
 const students = ref([])
 
 const addDlg = ref(false)
-const addForm = reactive({ day: 1, studentId: null })
+const addForm = reactive({ day: 1, studentId: null, taskId: null })
 const committeeDlg = ref(false)
 const addCommittee = reactive({ studentId: null, role: '班长' })
 
@@ -156,9 +165,11 @@ async function removeRoster(id) {
 }
 async function submitAdd() {
   if (!addForm.studentId) { ElMessage.warning('请选择学生'); return }
-  await http.post('/duty/roster', { dayOfWeek: addForm.day, studentId: addForm.studentId })
+  if (!addForm.taskId) { ElMessage.warning('请选择值日事项（干什么）'); return }
+  await http.post('/duty/roster', { dayOfWeek: addForm.day, studentId: addForm.studentId, taskId: addForm.taskId })
   ElMessage.success('已添加')
   addDlg.value = false
+  addForm.studentId = null; addForm.taskId = null
   roster.value = await http.get('/duty/roster')
 }
 async function submitCommittee() {
@@ -185,8 +196,10 @@ async function removeCommittee(id) {
 .day-col { flex: 1; min-width: 0; }
 .day-card { border-radius: 14px; background: #fff; border: 2px solid var(--c); overflow: hidden; min-height: 200px; }
 .day-title { background: var(--c); color: #fff; text-align: center; font-weight: 800; padding: 8px; }
-.duty-person { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; border-bottom: 1px dashed #eef0f5; font-weight: 600; }
-.duty-person .x { color: #e88; cursor: pointer; }
+.duty-person { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px dashed #eef0f5; font-weight: 600; }
+.dp-name { flex-shrink: 0; }
+.dp-task { margin-right: auto; }
+.duty-person .x { color: #e88; cursor: pointer; flex-shrink: 0; }
 .day-foot { text-align: center; color: #b0b3c0; font-size: 12px; padding: 12px; border-top: 1px dashed #ccc; border-style: dashed none none none; }
 .committee-list { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
 .committee-tag { font-size: 15px; padding: 8px 14px; }

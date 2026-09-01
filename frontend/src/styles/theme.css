@@ -1,63 +1,114 @@
-/* ===== 班主任工作台 粉彩主题 ===== */
+/* ===== 班主任工作台 · 奶油糖果马卡龙主题 ===== */
 :root {
-  --pink: #f78fb3;
-  --pink-soft: #fde4ee;
-  --blue: #7fb3f3;
-  --blue-soft: #e3eefc;
-  --green: #8fd8b0;
-  --green-soft: #e4f6ec;
+  /* 糖果色 */
+  --pink: #ff9ec4;
+  --pink-deep: #f07aad;
+  --pink-soft: #ffe3f0;
+  --peach: #ffb38a;
+  --peach-soft: #ffeede;
+  --blue: #8fb8f0;
+  --blue-deep: #6a9de0;
+  --blue-soft: #e3eeff;
+  --green: #8fd3b0;
+  --green-deep: #5cbb8c;
+  --green-soft: #dff6ea;
   --purple: #c3a6e8;
-  --purple-soft: #f0e8fb;
-  --orange: #f6b978;
-  --orange-soft: #fdeede;
-  --yellow: #f5d76e;
-  --yellow-soft: #fdf6dd;
-  --teal: #8fd3d8;
-  --bg: #f4f6fb;
-  --card-radius: 16px;
-  --el-color-primary: #f49ac0;
+  --purple-soft: #f1e9fc;
+  --yellow: #f8d97e;
+  --yellow-soft: #fdf3d0;
+  --teal: #8fd3d3;
+  /* 奶油底 */
+  --cream: #fff9f2;
+  --bg: #fdf4ec;
+  --ink: #6b5b73;
+  --ink-soft: #b3a3b2;
+  --card-radius: 22px;
+  --el-color-primary: #ff9ec4;
+  --candy-shadow: 0 10px 26px rgba(220,170,190,.22);
 }
 
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
-  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-  background: var(--bg);
-  color: #4a4a55;
+  font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(255,222,238,.55) 0, transparent 340px),
+    radial-gradient(circle at 92% 8%, rgba(255,238,214,.6) 0, transparent 360px),
+    radial-gradient(circle at 88% 92%, rgba(222,244,255,.55) 0, transparent 380px),
+    radial-gradient(circle at 6% 88%, rgba(224,248,234,.55) 0, transparent 340px),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--ink);
+  letter-spacing: .2px;
 }
 
-/* Element Plus 主色改粉彩 */
+/* Element Plus 主色改糖果粉 */
 .el-button--primary {
-  --el-button-bg-color: #f49ac0;
-  --el-button-border-color: #f49ac0;
-  --el-button-hover-bg-color: #f7b3d0;
-  --el-button-hover-border-color: #f7b3d0;
-  --el-button-active-bg-color: #ef86b4;
-  --el-button-active-border-color: #ef86b4;
+  --el-button-bg-color: #ff9ec4;
+  --el-button-border-color: #ff9ec4;
+  --el-button-hover-bg-color: #ffb3d2;
+  --el-button-hover-border-color: #ffb3d2;
+  --el-button-active-bg-color: #f07aad;
+  --el-button-active-border-color: #f07aad;
 }
-.el-button { border-radius: 10px; }
-.el-card { border-radius: var(--card-radius); border: none; box-shadow: 0 4px 16px rgba(120,130,160,.08); }
-.el-input__wrapper, .el-select__wrapper { border-radius: 10px !important; }
-.el-tag { border-radius: 8px; }
+.el-button { border-radius: 14px; font-weight: 700; }
+.el-button--small { border-radius: 11px; }
+.el-card {
+  border-radius: var(--card-radius); border: 3px solid #fff;
+  box-shadow: var(--candy-shadow);
+  background: rgba(255,255,255,.94);
+}
+.el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
+  border-radius: 14px !important;
+  box-shadow: 0 0 0 1px #ffe0ec inset !important;
+}
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 2px #ffb8d6 inset !important;
+}
+.el-tag { border-radius: 10px; font-weight: 700; border: none; }
+.el-dialog { border-radius: 24px !important; overflow: hidden; }
+.el-dialog__header { background: linear-gradient(135deg, #ffe3f0, #fff1dd); margin-right: 0; padding: 18px 22px; }
+.el-dialog__title { font-weight: 800; color: var(--ink); }
+.el-tabs__item { font-weight: 700; }
+.el-tabs__active-bar { background: var(--pink-deep); height: 3px; border-radius: 3px; }
+.el-popconfirm { border-radius: 16px; }
+.el-message { border-radius: 14px; font-weight: 600; }
+.el-popover.el-popper { border-radius: 16px; }
 
+/* 页面标题与工具栏 */
 .page-title {
-  font-size: 22px; font-weight: 800; color: #4a4a55;
+  font-size: 23px; font-weight: 800; color: var(--ink);
   display: flex; align-items: center; gap: 8px; margin: 0;
 }
-.page-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.page-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
 .spacer { flex: 1; }
 
-/* 男生蓝 / 女生粉 卡片 */
+/* 男生蓝 / 女生粉 糖果卡 */
 .stu-card {
-  border-radius: 12px; padding: 12px 8px; text-align: center; cursor: pointer;
-  transition: transform .12s, box-shadow .12s; user-select: none;
+  border-radius: 18px; padding: 13px 8px; text-align: center; cursor: pointer;
+  transition: transform .14s, box-shadow .14s; user-select: none;
+  border: 3px solid #fff; position: relative;
 }
-.stu-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.1); }
-.stu-card.boy { background: #e3eefc; border: 2px solid #b9d6f7; color: #3a6ea5; }
-.stu-card.girl { background: #fde4ee; border: 2px solid #f7c3d8; color: #c2568a; }
-.stu-card .name { font-size: 16px; font-weight: 700; }
+.stu-card:hover { transform: translateY(-3px) rotate(-.6deg); box-shadow: 0 10px 20px rgba(200,170,200,.28); }
+.stu-card.boy { background: linear-gradient(145deg, #eaf3ff, #d8e9ff); color: #4a7fc0; box-shadow: 0 4px 12px rgba(140,175,230,.25); }
+.stu-card.girl { background: linear-gradient(145deg, #ffeef6, #ffdfee); color: #d2609a; box-shadow: 0 4px  12px rgba(240,150,190,.25); }
+.stu-card .name { font-size: 16px; font-weight: 800; }
 .stu-card .no { font-size: 12px; opacity: .75; margin-top: 4px; }
 
-.stat-card { border-radius: 16px; padding: 20px; color: #fff; position: relative; overflow: hidden; }
-.stat-card .num { font-size: 40px; font-weight: 800; line-height: 1.1; }
-.stat-card .label { font-size: 14px; opacity: .95; margin-top: 6px; }
+/* 统计卡：糖果渐变 + 圆滚滚 */
+.stat-card {
+  border-radius: 22px; padding: 20px 22px; color: #fff; position: relative; overflow: hidden;
+  box-shadow: 0 10px 22px rgba(200,160,190,.28); border: 3px solid rgba(255,255,255,.55);
+}
+.stat-card .num { font-size: 40px; font-weight: 800; line-height: 1.1; text-shadow: 0 2px 6px rgba(160,110,140,.25); }
+.stat-card .label { font-size: 14px; font-weight: 700; opacity: .96; margin-top: 6px; }
+
+/* 表格甜点化 */
+.el-table { border-radius: 16px; overflow: hidden; }
+.el-table th.el-table__cell { background: #fff3e8 !important; color: #8a7080; font-weight: 800; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #f3d3e2; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #efb9d2; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }

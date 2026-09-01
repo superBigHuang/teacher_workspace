@@ -9,12 +9,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 管理接口：清空业务数据（用于从演示数据切换到真实班级）
- * 仅清空学生及其关联记录，保留账号/班级/科目/节次/座次与值日配置/速记规则/节假日/卡片/系统设置
+ * 管理接口：清空当前账号的学生业务数据（用于从演示数据切换到真实班级）。
+ * 仅清当前登录账号的数据，保留账号/班级/科目/节次/座次与值日配置/速记规则/节假日/卡片/系统设置。
  */
 @RestController
 @RequestMapping("/api/admin")
-public class AdminController {
+public class AdminController extends BaseController {
 
     private final JdbcTemplate jdbc;
 
@@ -23,11 +23,12 @@ public class AdminController {
     }
 
     /**
-     * 清空学生相关业务数据。
+     * 清空当前账号的学生相关业务数据。
      * 按“先子表后父表”的顺序删除，避免外键/引用残留。
      */
     @PostMapping("/reset-business")
     public Result<Map<String, Object>> resetBusiness() {
+        Long uid = uid();
         // 引用 student / exam 的业务表在前，主表 student、exam 在最后
         List<String> tables = List.of(
                 "score", "attendance", "discipline_log", "homework_check",
@@ -37,7 +38,7 @@ public class AdminController {
         int total = 0;
         Map<String, Object> detail = new LinkedHashMap<>();
         for (String t : tables) {
-            int n = jdbc.update("DELETE FROM " + t);
+            int n = jdbc.update("DELETE FROM " + t + " WHERE user_id=?", uid);
             detail.put(t, n);
             total += n;
         }

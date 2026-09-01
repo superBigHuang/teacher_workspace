@@ -7,11 +7,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 
 /**
- * 座次表：配置、随机排座（男女尽量交错）、手动交换、清空
+ * 座次表：配置、随机排座（男女尽量交错）、手动交换、清空（按账号隔离）
  */
 @RestController
 @RequestMapping("/api/seat")
-public class SeatController {
+public class SeatController extends BaseController {
 
     private final JdbcTemplate jdbc;
     private final Random random = new Random();
@@ -21,20 +21,28 @@ public class SeatController {
     }
 
     private Long homeroomClassId() {
+        Long uid = uid();
         try {
             return Long.valueOf(jdbc.queryForObject(
-                    "SELECT v FROM setting WHERE k='homeroom_class_id'", String.class));
+                    "SELECT v FROM setting WHERE user_id=? AND k='homeroom_class_id'", String.class, uid));
         } catch (Exception e) {
-            return 1L;
+            try {
+                return jdbc.queryForObject(
+                        "SELECT id FROM class_info WHERE user_id=? AND type='HOMEROOM' ORDER BY id LIMIT 1",
+                        Long.class, uid);
+            } catch (Exception e2) {
+                return 1L;
+            }
         }
     }
 
     /** 读取座次配置（无则返回默认 7 行 8 列，过道 2/4/6 列后） */
     @GetMapping("/config")
     public Result<Map<String, Object>> config() {
+        Long uid = uid();
         Long cid = homeroomClassId();
         List<Map<String, Object>> list = jdbc.queryForList(
-                "SELECT `rows`,cols,aisles FROM seat_config WHERE class_id=?", cid);
+                "SELECT `rows`,cols,aisles FROM seat_config WHERE user_id=? AND class_id=?", uid, cid);
         if (list.isEmpty()) {
             return Result.ok(Map.of("rows", 7, "cols", 8, "aisles", List.of(2, 4, 6)));
         }
@@ -45,16 +53,20 @@ public class SeatController {
 
     @PostMapping("/config")
     public Result<Void> saveConfig(@RequestBody Map<String, Object> body) {
+        Long uid = uid();
         Long cid = homeroomClassId();
         int rows = ((Number) body.get("rows")).intValue();
         int cols = ((Number) body.get("cols")).intValue();
         String aisles = body.get("aisles") == null ? "" : String.valueOf(body.get("aisles"))
                 .replace("[", "").replace("]", "").replace(" ", "");
-        Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM seat_config WHERE class_id=?", Integer.class, cid);
+        Integer cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM seat_config WHERE user_id=? AND class_id=?", Integer.class, uid, cid);
         if (cnt == 0) {
-            jdbc.update("INSERT INTO seat_config(class_id,`rows`,cols,aisles) VALUES(?,?,?,?)", cid, rows, cols, aisles);
+            jdbc.update("INSERT INTO seat_config(user_id,class_id,`rows`,cols,aisles) VALUES(?,?,?,?,?)",
+                    uid, cid, rows, cols, aisles);
         } else {
-            jdbc.update("UPDATE seat_config SET `rows`=?,cols=?,aisles=? WHERE class_id=?", rows, cols, aisles, cid);
+            jdbc.update("UPDATE seat_config SET `rows`=?,cols=?,aisles=? WHERE user_id=? AND class_id=?",
+                    rows, cols, aisles, uid, cid);
         }
         return Result.ok();
     }
@@ -62,6 +74,7 @@ public class SeatController {
     /** 座位网格：返回每个座位的学生（含空座位） */
     @GetMapping("/grid")
     public Result<Map<String, Object>> grid() {
+        Long uid = uid();
         Long cid = homeroomClassId();
         Map<String, Object> cfg = config().getData();
         int rows = ((Number) cfg.get("rows")).intValue();
@@ -78,8 +91,9 @@ public class SeatController {
                 seat.put("aisle", false);
                 List<Map<String, Object>> assigned = jdbc.queryForList(
                         "SELECT a.student_id, s.name, s.stu_no, s.gender FROM seat_assignment a " +
-                        "LEFT JOIN student s ON s.id=a.student_id WHERE a.class_id=? AND a.row_no=? AND a.col_no=?",
-                        cid, r, c);
+                        "LEFT JOIN student s ON s.id=a.student_id " +
+                        "WHERE a.user_id=? AND a.class_id=? AND a.row_no=? AND a.col_no=?",
+                        uid, cid, r, c);
                 if (!assigned.isEmpty() && assigned.get(0).get("student_id") != null) {
                     Map<String, Object> a = assigned.get(0);
                     seat.put("studentId", a.get("student_id"));
@@ -96,8 +110,9 @@ public class SeatController {
     /** 随机排座：男女尽量交错，空位留在后排 */
     @PostMapping("/auto")
     public Result<Void> auto() {
+        Long uid = uid();
         Long cid = homeroomClassId();
-        saveConfigCurrent(cid);
+        saveConfigCurrent(uid, cid);
         Map<String, Object> cfg = config().getData();
         int rows = ((Number) cfg.get("rows")).intValue();
         int cols = ((Number) cfg.get("cols")).intValue();
@@ -105,7 +120,7 @@ public class SeatController {
         // 因此排座位置必须用满 rows×cols，不能按过道列跳过（否则每排少坐 aisles.size() 人）。
 
         List<Map<String, Object>> students = jdbc.queryForList(
-                "SELECT id,gender FROM student WHERE class_id=? ORDER BY stu_no", cid);
+                "SELECT id,gender FROM student WHERE user_id=? AND class_id=? ORDER BY stu_no", uid, cid);
         List<Long> boys = new ArrayList<>(), girls = new ArrayList<>();
         for (Map<String, Object> s : students) {
             if ("女".equals(s.get("gender"))) girls.add(((Number) s.get("id")).longValue());
@@ -141,51 +156,54 @@ public class SeatController {
             }
         }
 
-        jdbc.update("DELETE FROM seat_assignment WHERE class_id=?", cid);
+        jdbc.update("DELETE FROM seat_assignment WHERE user_id=? AND class_id=?", uid, cid);
         for (int i = 0; i < ordered.size() && i < positions.size(); i++) {
             int[] pos = positions.get(i);
-            jdbc.update("INSERT INTO seat_assignment(class_id,row_no,col_no,student_id) VALUES(?,?,?,?)",
-                    cid, pos[0], pos[1], ordered.get(i));
+            jdbc.update("INSERT INTO seat_assignment(user_id,class_id,row_no,col_no,student_id) VALUES(?,?,?,?,?)",
+                    uid, cid, pos[0], pos[1], ordered.get(i));
         }
         return Result.ok();
     }
 
     @PostMapping("/clear")
     public Result<Void> clear() {
-        Long cid = homeroomClassId();
-        jdbc.update("DELETE FROM seat_assignment WHERE class_id=?", cid);
+        jdbc.update("DELETE FROM seat_assignment WHERE user_id=? AND class_id=?", uid(), homeroomClassId());
         return Result.ok();
     }
 
     /** 交换/移动两个座位（目标可为空位） */
     @PostMapping("/move")
     public Result<Void> move(@RequestBody Map<String, Object> body) {
+        Long uid = uid();
         Long cid = homeroomClassId();
         int fr = ((Number) body.get("fromRow")).intValue();
         int fc = ((Number) body.get("fromCol")).intValue();
         int tr = ((Number) body.get("toRow")).intValue();
         int tc = ((Number) body.get("toCol")).intValue();
-        Long fromSid = queryStudent(cid, fr, fc);
-        Long toSid = queryStudent(cid, tr, tc);
-        jdbc.update("DELETE FROM seat_assignment WHERE class_id=? AND row_no=? AND col_no=?", cid, tr, tc);
-        jdbc.update("DELETE FROM seat_assignment WHERE class_id=? AND row_no=? AND col_no=?", cid, fr, fc);
-        if (fromSid != null) jdbc.update("INSERT INTO seat_assignment(class_id,row_no,col_no,student_id) VALUES(?,?,?,?)", cid, tr, tc, fromSid);
-        if (toSid != null) jdbc.update("INSERT INTO seat_assignment(class_id,row_no,col_no,student_id) VALUES(?,?,?,?)", cid, fr, fc, toSid);
+        Long fromSid = queryStudent(uid, cid, fr, fc);
+        Long toSid = queryStudent(uid, cid, tr, tc);
+        jdbc.update("DELETE FROM seat_assignment WHERE user_id=? AND class_id=? AND row_no=? AND col_no=?", uid, cid, tr, tc);
+        jdbc.update("DELETE FROM seat_assignment WHERE user_id=? AND class_id=? AND row_no=? AND col_no=?", uid, cid, fr, fc);
+        if (fromSid != null) jdbc.update("INSERT INTO seat_assignment(user_id,class_id,row_no,col_no,student_id) VALUES(?,?,?,?,?)", uid, cid, tr, tc, fromSid);
+        if (toSid != null) jdbc.update("INSERT INTO seat_assignment(user_id,class_id,row_no,col_no,student_id) VALUES(?,?,?,?,?)", uid, cid, fr, fc, toSid);
         return Result.ok();
     }
 
-    private Long queryStudent(Long cid, int r, int c) {
+    private Long queryStudent(Long uid, Long cid, int r, int c) {
         List<Map<String, Object>> l = jdbc.queryForList(
-                "SELECT student_id FROM seat_assignment WHERE class_id=? AND row_no=? AND col_no=?", cid, r, c);
+                "SELECT student_id FROM seat_assignment WHERE user_id=? AND class_id=? AND row_no=? AND col_no=?",
+                uid, cid, r, c);
         if (l.isEmpty() || l.get(0).get("student_id") == null) return null;
         return ((Number) l.get(0).get("student_id")).longValue();
     }
 
-    /** 排座前确保配置已持久化（使用当前 config 接口默认值） */
-    private void saveConfigCurrent(Long cid) {
-        Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM seat_config WHERE class_id=?", Integer.class, cid);
+    /** 排座前确保配置已持久化（使用默认值） */
+    private void saveConfigCurrent(Long uid, Long cid) {
+        Integer cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM seat_config WHERE user_id=? AND class_id=?", Integer.class, uid, cid);
         if (cnt == 0) {
-            jdbc.update("INSERT INTO seat_config(class_id,`rows`,cols,aisles) VALUES(?,?,?,?)", cid, 7, 8, "2,4,6");
+            jdbc.update("INSERT INTO seat_config(user_id,class_id,`rows`,cols,aisles) VALUES(?,?,?,?,?)",
+                    uid, cid, 7, 8, "2,4,6");
         }
     }
 

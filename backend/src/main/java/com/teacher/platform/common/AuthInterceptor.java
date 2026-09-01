@@ -28,7 +28,9 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (auth != null && auth.startsWith("Bearer ")) {
             Claims claims = jwtUtil.parse(auth.substring(7));
             if (claims != null) {
-                request.setAttribute("uid", claims.get("uid"));
+                // 统一转 Long（jjwt 对小整数可能返回 Integer）
+                Object uidRaw = claims.get("uid");
+                request.setAttribute("uid", uidRaw == null ? null : ((Number) uidRaw).longValue());
                 request.setAttribute("username", claims.getSubject());
                 return true;
             }
