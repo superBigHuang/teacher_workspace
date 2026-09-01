@@ -13,7 +13,6 @@ const routes = [
       { path: 'dashboard', name: 'dashboard', meta: { title: '工作台' }, component: () => import('../views/Dashboard.vue') },
       { path: 'seat', name: 'seat', meta: { title: '座次表' }, component: () => import('../views/Seat.vue') },
       { path: 'duty', name: 'duty', meta: { title: '值日表·班委' }, component: () => import('../views/Duty.vue') },
-      { path: 'pet', name: 'pet', meta: { title: '班级宠物园' }, component: () => import('../views/PetGarden.vue') },
       { path: 'score', name: 'score', meta: { title: '成绩分析' }, component: () => import('../views/Score.vue') },
       { path: 'comment', name: 'comment', meta: { title: '期末评语' }, component: () => import('../views/Comment.vue') },
       { path: 'roster', name: 'roster', meta: { title: '花名册' }, component: () => import('../views/Roster.vue') },

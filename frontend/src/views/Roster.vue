@@ -234,9 +234,9 @@
               {{ l.remark || l.ruleName || '评价' }}
               <span class="muted">{{ fmtPetTime(l.createdAt) }}</span>
             </div>
-            <el-empty v-if="!petLogs.length" description="还没有成长记录，去宠物园评价吧" :image-size="50" />
+            <el-empty v-if="!petLogs.length" description="还没有成长记录，去座次表点击宠物评价吧" :image-size="50" />
           </div>
-          <el-empty v-else description="还未领养守护精灵，可在「🐾 宠物园」领养" :image-size="70" />
+          <el-empty v-else description="还未领养守护精灵，可在「🪑 座次表」点击精灵蛋领养" :image-size="70" />
         </el-tab-pane>
         </el-tabs>
       </template>

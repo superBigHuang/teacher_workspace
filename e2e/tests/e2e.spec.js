@@ -713,7 +713,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     })
 
     // ============ 11f. 班级宠物园 ============
-    await test.step('宠物园：领养→Lv2升级→批量评价→考勤自动扣分与开关→撤回回滚→商店兑换兑现→满级毕业徽章；UI角标与宠物档案', async () => {
+    await test.step('座次表宠物：领养→Lv2升级→批量评价→考勤自动扣分与开关→撤回回滚→商店兑换兑现→满级毕业徽章；座位卡UI与花名册宠物档案', async () => {
       const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
       const apiGet = (url) => j(request.get.bind(request), API + url)
       const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
@@ -724,14 +724,14 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         return pets.find(p => p.studentId === testStudentId)
       }
 
-      // ① 领养 → UI 宠物园显示 Lv1 形态（dragon_1）
+      // ① 领养 → UI 座次表页座位上显示 Lv1 形态（dragon_1；若未排座则在下方宠物卡区）
       let r = await apiPost('/pet/adopt', { studentId: testStudentId, petKey: 'dragon', petName: 'E2E小龙' })
       expect(r.code).toBe(200)
       let me = await petOf()
       expect(me.petId).toBeTruthy()
       expect(me.level).toBe(1)
-      await page.goto('/pet')
-      const myCard = page.locator('.pet-card', { hasText: 'E2E测试生' })
+      await page.goto('/seat')
+      const myCard = page.locator('.seat, .pet-card', { hasText: 'E2E测试生' })
       await expect.poll(async () => await myCard.count(), { timeout: 15000 }).toBe(1)
       await expect(myCard.locator('img[src*="dragon_1.webp"]')).toBeVisible()
 
