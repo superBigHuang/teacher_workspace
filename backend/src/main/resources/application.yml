@@ -27,6 +27,16 @@ app:
     secret: teacher-workplatform-secret-key-change-me-0123456789abcdef
     expire-hours: 72
 
+ai:
+  defaults:
+    # 默认 LLM 服务（讯飞星火 MaaS，OpenAI 兼容协议）——平台共享服务，key 内置开箱即用；
+    # 部署时可用环境变量 AI_API_KEY / AI_BASE_URL / AI_MODEL 覆盖（换 key/换服务无需改代码）
+    base-url: ${AI_BASE_URL:https://maas-api.cn-huabei-1.xf-yun.com/v2}
+    api-key: ${AI_API_KEY:ak-2cd463b80927ad92df8df453966d982d}
+    model: ${AI_MODEL:spark-x2.5-4b}
+    temperature: 0.7
+    timeout-ms: 60000
+
 logging:
   level:
     com.teacher.platform: info
