@@ -1,6 +1,8 @@
 package com.teacher.platform.controller;
 
 import com.teacher.platform.common.Result;
+import com.teacher.platform.service.AchievementScanner;
+import com.teacher.platform.service.TermStatsService;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,16 +12,21 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.*;
 
 /**
- * 成绩分析：考试管理、Excel 导入、各科统计、分数段、折线、明细、双考试对比
+ * 成绩分析：考试管理、Excel 导入、各科统计、分数段、折线、明细、双考试对比、
+ * 家长通知单数据包（按账号隔离）
  */
 @RestController
 @RequestMapping("/api/score")
-public class ScoreController {
+public class ScoreController extends BaseController {
 
     private final JdbcTemplate jdbc;
+    private final TermStatsService termStats;
+    private final AchievementScanner scanner;
 
-    public ScoreController(JdbcTemplate jdbc) {
+    public ScoreController(JdbcTemplate jdbc, TermStatsService termStats, AchievementScanner scanner) {
         this.jdbc = jdbc;
+        this.termStats = termStats;
+        this.scanner = scanner;
     }
 
     private double passLine() { return getSetting("pass_line", 60); }
@@ -27,7 +34,8 @@ public class ScoreController {
 
     private double getSetting(String k, double def) {
         try {
-            return Double.parseDouble(jdbc.queryForObject("SELECT v FROM setting WHERE k=?", String.class, k));
+            return Double.parseDouble(jdbc.queryForObject(
+                    "SELECT v FROM setting WHERE user_id=? AND k=?", String.class, uid(), k));
         } catch (Exception e) {
             return def;
         }
@@ -37,13 +45,15 @@ public class ScoreController {
     @GetMapping("/exams")
     public Result<List<Map<String, Object>>> exams() {
         return Result.ok(jdbc.queryForList(
-                "SELECT id,name,exam_date examDate,source_file sourceFile FROM exam ORDER BY exam_date DESC, id DESC"));
+                "SELECT id,name,exam_date examDate,source_file sourceFile FROM exam WHERE user_id=? ORDER BY exam_date DESC, id DESC",
+                uid()));
     }
 
     @DeleteMapping("/exam/{id}")
     public Result<Void> deleteExam(@PathVariable Long id) {
-        jdbc.update("DELETE FROM score WHERE exam_id=?", id);
-        jdbc.update("DELETE FROM exam WHERE id=?", id);
+        Long uid = uid();
+        jdbc.update("DELETE FROM score WHERE user_id=? AND exam_id=?", uid, id);
+        jdbc.update("DELETE FROM exam WHERE id=? AND user_id=?", id, uid);
         return Result.ok();
     }
 
@@ -52,8 +62,9 @@ public class ScoreController {
     public Result<Map<String, Object>> importScore(@RequestParam("file") MultipartFile file,
                                                    @RequestParam String examName,
                                                    @RequestParam(required = false) String examDate) throws Exception {
-        jdbc.update("INSERT INTO exam(name,exam_date,source_file) VALUES(?,?,?)",
-                examName, examDate == null || examDate.isBlank() ? null : examDate, file.getOriginalFilename());
+        Long uid = uid();
+        jdbc.update("INSERT INTO exam(user_id,name,exam_date,source_file) VALUES(?,?,?,?)",
+                uid, examName, examDate == null || examDate.isBlank() ? null : examDate, file.getOriginalFilename());
         Long examId = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
 
         // WorkbookFactory 自动识别 .xls/.xlsx
@@ -75,30 +86,43 @@ public class ScoreController {
             String stuNo = stuNoCol >= 0 ? getString(row.getCell(stuNoCol)) : "";
             String name = nameCol >= 0 ? getString(row.getCell(nameCol)) : "";
             if (stuNo.isBlank() && name.isBlank()) continue;
-            Long studentId = findStudentId(stuNo, name);
+            Long studentId = findStudentId(uid, stuNo, name);
             for (String sub : subjects) {
                 int ci = heads.indexOf(sub);
                 String val = getString(row.getCell(ci));
                 if (val.isBlank()) continue;
                 double score;
                 try { score = Double.parseDouble(val); } catch (Exception e) { continue; }
-                jdbc.update("INSERT INTO score(exam_id,student_id,subject,score,stu_no,stu_name) VALUES(?,?,?,?,?,?)",
-                        examId, studentId, sub, score, stuNo, name);
+                jdbc.update("INSERT INTO score(user_id,exam_id,student_id,subject,score,stu_no,stu_name) VALUES(?,?,?,?,?,?,?)",
+                        uid, examId, studentId, sub, score, stuNo, name);
             }
             rows++;
         }
         wb.close();
-        return Result.ok(Map.of("examId", examId, "students", rows, "subjects", subjects.size()));
+        // 成绩导入后触发一次成就自动扫描（全勤/进步/全科优秀等），失败不阻断导入
+        List<Map<String, Object>> newAwards = new ArrayList<>();
+        try {
+            newAwards = scanner.scan(uid);
+        } catch (Exception ignored) {
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("examId", examId);
+        result.put("students", rows);
+        result.put("subjects", subjects.size());
+        result.put("newAwards", newAwards);
+        return Result.ok(result);
     }
 
-    private Long findStudentId(String stuNo, String name) {
+    private Long findStudentId(Long uid, String stuNo, String name) {
         try {
             if (!stuNo.isBlank()) {
-                List<Map<String, Object>> l = jdbc.queryForList("SELECT id FROM student WHERE stu_no=?", stuNo);
+                List<Map<String, Object>> l = jdbc.queryForList(
+                        "SELECT id FROM student WHERE user_id=? AND stu_no=?", uid, stuNo);
                 if (!l.isEmpty()) return ((Number) l.get(0).get("id")).longValue();
             }
             if (!name.isBlank()) {
-                List<Map<String, Object>> l = jdbc.queryForList("SELECT id FROM student WHERE name=?", name);
+                List<Map<String, Object>> l = jdbc.queryForList(
+                        "SELECT id FROM student WHERE user_id=? AND name=?", uid, name);
                 if (!l.isEmpty()) return ((Number) l.get(0).get("id")).longValue();
             }
         } catch (Exception ignored) {}
@@ -110,7 +134,7 @@ public class ScoreController {
     @GetMapping("/subject-stats")
     public Result<List<Map<String, Object>>> subjectStats(@RequestParam Long examId) {
         List<Map<String, Object>> scores = jdbc.queryForList(
-                "SELECT subject, score FROM score WHERE exam_id=?", examId);
+                "SELECT subject, score FROM score WHERE user_id=? AND exam_id=?", uid(), examId);
         Map<String, List<Double>> bySub = new LinkedHashMap<>();
         for (Map<String, Object> s : scores) {
             bySub.computeIfAbsent((String) s.get("subject"), k -> new ArrayList<>())
@@ -138,7 +162,8 @@ public class ScoreController {
     /** 分数段分布（全部科目合并） */
     @GetMapping("/distribution")
     public Result<Map<String, Object>> distribution(@RequestParam Long examId) {
-        List<Double> scores = jdbc.queryForList("SELECT score FROM score WHERE exam_id=?", examId)
+        List<Double> scores = jdbc.queryForList(
+                "SELECT score FROM score WHERE user_id=? AND exam_id=?", uid(), examId)
                 .stream().map(m -> ((Number) m.get("score")).doubleValue()).toList();
         int[] buckets = new int[5]; // <60, 60-69, 70-79, 80-89, >=90
         for (double v : scores) {
@@ -156,8 +181,8 @@ public class ScoreController {
     @GetMapping("/line")
     public Result<Map<String, Object>> line(@RequestParam Long examId, @RequestParam String subject) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT stu_name name, score FROM score WHERE exam_id=? AND subject=? ORDER BY score DESC",
-                examId, subject);
+                "SELECT stu_name name, score FROM score WHERE user_id=? AND exam_id=? AND subject=? ORDER BY score DESC",
+                uid(), examId, subject);
         List<String> names = rows.stream().map(r -> (String) r.get("name")).toList();
         List<Double> vals = rows.stream().map(r -> round(((Number) r.get("score")).doubleValue())).toList();
         DoubleSummaryStatistics st = vals.stream().mapToDouble(Double::doubleValue).summaryStatistics();
@@ -176,7 +201,8 @@ public class ScoreController {
     @GetMapping("/detail")
     public Result<Map<String, Object>> detail(@RequestParam Long examId) {
         List<Map<String, Object>> scores = jdbc.queryForList(
-                "SELECT student_id, stu_no, stu_name, subject, score FROM score WHERE exam_id=?", examId);
+                "SELECT student_id, stu_no, stu_name, subject, score FROM score WHERE user_id=? AND exam_id=?",
+                uid(), examId);
         // 科目顺序按首次出现
         List<String> subjects = new ArrayList<>();
         Map<String, Map<String, Double>> byStudent = new LinkedHashMap<>();
@@ -271,6 +297,177 @@ public class ScoreController {
             return Integer.compare(ry, rx);
         });
         return Result.ok(Map.of("subjects", subjects, "rows", result));
+    }
+
+    /**
+     * 家长成绩通知单数据包（GET /score/report?examId=&compareExamId=）。
+     * 以班主任班在籍学生为主表（缺考学生也出页，成绩列显示"—"）；
+     * 每生含各科 {score,classAvg,classMax,grade(A≥优秀线/B≥及格线/C)}、总分/排名/对比排名变化、
+     * 本学期日常表现（迟到/请假天数/作业未交/违纪，复用 TermStatsService）、统一寄语兜底。
+     * AI 逐人寄语由前端并发调 /ai/generate 后覆盖 comment 字段。
+     */
+    @GetMapping("/report")
+    public Result<Map<String, Object>> report(@RequestParam Long examId,
+                                              @RequestParam(required = false) Long compareExamId) {
+        Long uid = uid();
+        Map<String, Object> data = new LinkedHashMap<>();
+
+        // 抬头：学校/教师/学期/班级/考试信息/等级线/统一寄语
+        Map<String, Object> user = jdbc.queryForMap(
+                "SELECT display_name displayName, school FROM sys_user WHERE id=?", uid);
+        Long classId = termStats.homeroomClassId(uid);
+        String className = "";
+        try {
+            className = jdbc.queryForObject("SELECT name FROM class_info WHERE id=?", String.class, classId);
+        } catch (Exception ignored) {}
+        Map<String, Object> exam;
+        try {
+            exam = jdbc.queryForMap("SELECT name, exam_date examDate FROM exam WHERE id=? AND user_id=?", examId, uid);
+        } catch (Exception e) {
+            return Result.fail("考试不存在");
+        }
+        data.put("school", str(user.get("school")));
+        data.put("teacherName", firstNonBlank(settingStr(uid, "teacher_name"), str(user.get("displayName"))));
+        data.put("term", settingStr(uid, "term"));
+        data.put("className", className == null ? "" : className);
+        data.put("examName", exam.get("name"));
+        data.put("examDate", String.valueOf(exam.get("examDate")));
+        data.put("passLine", passLine());
+        data.put("excellentLine", excellentLine());
+        data.put("reportMessage", settingStr(uid, "report_message"));
+
+        // 本次与对比考试聚合
+        Map<String, Object> agg = aggregateExam(uid, examId);
+        @SuppressWarnings("unchecked")
+        List<String> subjects = (List<String>) agg.get("subjects");
+        @SuppressWarnings("unchecked")
+        Map<Long, Map<String, Double>> stuScores = (Map<Long, Map<String, Double>>) agg.get("stuScores");
+        @SuppressWarnings("unchecked")
+        Map<String, double[]> subStat = (Map<String, double[]>) agg.get("subStat"); // [avg, max]
+        @SuppressWarnings("unchecked")
+        Map<Long, Integer> rankMap = (Map<Long, Integer>) agg.get("rankMap");
+        @SuppressWarnings("unchecked")
+        Map<Long, Double> totalMap = (Map<Long, Double>) agg.get("totalMap");
+        int totalStudents = (int) agg.get("totalStudents");
+        Map<Long, Integer> cmpRank = null;
+        if (compareExamId != null) {
+            @SuppressWarnings("unchecked")
+            Map<Long, Integer> m = (Map<Long, Integer>) aggregateExam(uid, compareExamId).get("rankMap");
+            cmpRank = m;
+        }
+        data.put("compareExamId", compareExamId);
+
+        // 学生列表：以全班在籍学生为主表，成绩按 student_id 关联
+        List<Map<String, Object>> students = new ArrayList<>();
+        for (Map<String, Object> m : termStats.materials(uid, classId)) {
+            Long sid = ((Number) m.get("studentId")).longValue();
+            Map<String, Object> stu = new LinkedHashMap<>();
+            stu.put("studentId", sid);
+            stu.put("stuNo", m.get("stuNo"));
+            stu.put("name", m.get("name"));
+            List<Map<String, Object>> subjList = new ArrayList<>();
+            Map<String, Double> ss = stuScores.getOrDefault(sid, Collections.emptyMap());
+            for (String sub : subjects) {
+                Double sc = ss.get(sub);
+                double[] st = subStat.getOrDefault(sub, new double[]{0, 0});
+                Map<String, Object> sm = new LinkedHashMap<>();
+                sm.put("subject", sub);
+                sm.put("score", sc == null ? null : round(sc));
+                sm.put("classAvg", round(st[0]));
+                sm.put("classMax", round(st[1]));
+                sm.put("grade", gradeOf(sc));
+                subjList.add(sm);
+            }
+            stu.put("subjects", subjList);
+            stu.put("total", totalMap.get(sid) == null ? null : round(totalMap.get(sid)));
+            stu.put("rank", rankMap.get(sid));
+            stu.put("totalStudents", totalStudents);
+            // 排名变化：对比考试名次 - 本次名次（正数=上升）；任一缺考为 null
+            Integer cur = rankMap.get(sid);
+            Integer prev = cmpRank == null ? null : cmpRank.get(sid);
+            stu.put("rankChange", (cur != null && prev != null) ? prev - cur : null);
+            // 日常表现（本学期，与评语素材同口径）
+            Map<String, Object> att = new LinkedHashMap<>();
+            att.put("late", m.get("late"));
+            att.put("leaveDays", m.get("leaveDays"));
+            stu.put("attendance", att);
+            stu.put("homeworkMissing", m.get("homeworkMissing"));
+            stu.put("disciplineCount", m.get("discipline"));
+            stu.put("comment", settingStr(uid, "report_message")); // 统一寄语兜底，前端可用 AI 寄语覆盖
+            students.add(stu);
+        }
+        data.put("students", students);
+        return Result.ok(data);
+    }
+
+    /**
+     * 单次考试聚合：科目顺序、每生各科分数、各科[均分,最高]、总分排名（SUM(score) 降序，与明细页同口径）。
+     */
+    private Map<String, Object> aggregateExam(Long uid, Long examId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT student_id sid, subject, score FROM score WHERE user_id=? AND exam_id=? AND student_id IS NOT NULL",
+                uid, examId);
+        List<String> subjects = new ArrayList<>();
+        Map<Long, Map<String, Double>> stuScores = new HashMap<>();
+        Map<String, List<Double>> subVals = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            Long sid = ((Number) r.get("sid")).longValue();
+            String sub = String.valueOf(r.get("subject"));
+            double sc = ((Number) r.get("score")).doubleValue();
+            if (!subjects.contains(sub)) subjects.add(sub);
+            stuScores.computeIfAbsent(sid, k -> new LinkedHashMap<>()).put(sub, sc);
+            subVals.computeIfAbsent(sub, k -> new ArrayList<>()).add(sc);
+        }
+        Map<String, double[]> subStat = new LinkedHashMap<>();
+        subVals.forEach((sub, vals) -> {
+            double avg = vals.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            double max = vals.stream().mapToDouble(Double::doubleValue).max().orElse(0);
+            subStat.put(sub, new double[]{avg, max});
+        });
+        // 总分降序排名
+        List<Map.Entry<Long, Double>> totals = new ArrayList<>();
+        stuScores.forEach((sid, sm) ->
+                totals.add(Map.entry(sid, sm.values().stream().mapToDouble(Double::doubleValue).sum())));
+        totals.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+        Map<Long, Integer> rankMap = new HashMap<>();
+        Map<Long, Double> totalMap = new HashMap<>();
+        for (int i = 0; i < totals.size(); i++) {
+            rankMap.put(totals.get(i).getKey(), i + 1);
+            totalMap.put(totals.get(i).getKey(), totals.get(i).getValue());
+        }
+        Map<String, Object> res = new HashMap<>();
+        res.put("subjects", subjects);
+        res.put("stuScores", stuScores);
+        res.put("subStat", subStat);
+        res.put("rankMap", rankMap);
+        res.put("totalMap", totalMap);
+        res.put("totalStudents", totals.size());
+        return res;
+    }
+
+    /** 等级：A≥优秀线 / B≥及格线 / C<及格线 / 缺考"—" */
+    private String gradeOf(Double sc) {
+        if (sc == null) return "—";
+        if (sc >= excellentLine()) return "A";
+        if (sc >= passLine()) return "B";
+        return "C";
+    }
+
+    private String settingStr(Long uid, String k) {
+        try {
+            String v = jdbc.queryForObject("SELECT v FROM setting WHERE user_id=? AND k=?", String.class, uid, k);
+            return v == null ? "" : v;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String firstNonBlank(String a, String b) {
+        return a != null && !a.isBlank() ? a : (b == null ? "" : b);
+    }
+
+    private String str(Object o) {
+        return o == null ? "" : String.valueOf(o).trim();
     }
 
     @SuppressWarnings("unchecked")
