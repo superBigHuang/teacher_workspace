@@ -71,6 +71,36 @@
       </el-col>
     </el-row>
 
+    <!-- 请假提醒条（固定，不参与拖拽排序） -->
+    <el-card class="leave-card" shadow="hover">
+      <div class="lv-nums">
+        <div class="lv-num"><b>🏖️ {{ leaveStat.activeCount || 0 }}</b><span>请假中</span></div>
+        <div class="lv-num" :class="{ hot: leaveStat.todayReturnCount > 0 }">
+          <b>{{ leaveStat.todayReturnCount || 0 }}</b><span>今日应销假</span>
+        </div>
+        <div class="lv-num" :class="{ hot: leaveStat.overdueCount > 0 }">
+          <b class="danger">{{ leaveStat.overdueCount || 0 }}</b><span>未归校</span>
+        </div>
+      </div>
+      <div class="lv-names">
+        <template v-if="activeLeaves.length">
+          <el-tag v-for="l in activeLeaves.slice(0, 8)" :key="l.id"
+                  :type="l.overdue ? 'danger' : (l.returnToday ? 'warning' : 'info')"
+                  effect="plain" class="lv-tag">
+            {{ l.name }}·{{ l.leaveType }}·{{ l.endDate }}返校
+          </el-tag>
+          <span v-if="activeLeaves.length > 8" class="lv-more">等 {{ activeLeaves.length }} 人</span>
+        </template>
+        <span v-else class="empty-h">当前无人请假 🎉</span>
+      </div>
+      <div class="lv-actions">
+        <el-button v-if="returnableLeaves.length" type="danger" size="small" @click="batchReturn">
+          一键销假（{{ returnableLeaves.length }}）
+        </el-button>
+        <el-button size="small" @click="go('/daily')">请假管理 →</el-button>
+      </div>
+    </el-card>
+
     <!-- 工作卡片（可拖拽排序） -->
     <div class="section-title">📌 工作卡片 <span class="drag-hint">（拖动卡片可调整顺序）</span></div>
     <draggable v-model="cardOrder" :animation="200" :item-key="el => el" class="card-grid" @end="saveOrder">
@@ -197,6 +227,8 @@ const noteText = ref('')
 const parseDlg = ref(false)
 const entries = ref([])
 const updatedAt = ref('')
+const leaveStat = ref({})     // /leave/summary 计数
+const activeLeaves = ref([])   // /leave/active 请假中名单
 
 const MODULE_META = {
   ATTENDANCE: { label: '早读考勤', color: '#f0c96e' },
@@ -253,6 +285,25 @@ async function loadTodayCourses() {
 }
 
 function go(path) { router.push(path) }
+
+// ---------- 请假提醒 ----------
+/** 需一键销假：今日应销假 + 已超期未归校 */
+const returnableLeaves = computed(() => activeLeaves.value.filter(l => l.returnToday || l.overdue))
+
+async function loadLeave() {
+  leaveStat.value = await http.get('/leave/summary')
+  activeLeaves.value = await http.get('/leave/active')
+}
+
+/** 工作台一键销假：逐个置 DONE 后刷新请假数据与统计 */
+async function batchReturn() {
+  for (const l of returnableLeaves.value) {
+    await http.post(`/leave/${l.id}/return`, {})
+  }
+  ElMessage.success(`已为 ${returnableLeaves.value.length} 名学生销假`)
+  await loadLeave()
+  loadStats()
+}
 
 async function saveSettings() {
   await http.post('/dashboard/settings', {
@@ -327,6 +378,7 @@ onMounted(async () => {
   loadHolidays()
   loadCards()
   loadTodayCourses()
+  loadLeave()
   allStudents.value = await http.get('/roster/students')
 })
 </script>
@@ -384,4 +436,17 @@ onMounted(async () => {
 .entry-text { color: #5a5f72; }
 .entry-student { width: 180px; margin-left: auto; }
 .parse-tip { color: #8a8fa3; font-size: 13px; margin-bottom: 8px; }
+/* 请假提醒条：奶油黄底，数字+名单+操作三段 */
+.leave-card { margin-bottom: 16px; background: linear-gradient(135deg, #fff8e6, #fffdf5); border: 1px solid #f5e3b0; }
+.leave-card :deep(.el-card__body) { display: flex; align-items: center; gap: 20px; }
+.lv-nums { display: flex; gap: 10px; flex-shrink: 0; }
+.lv-num { text-align: center; background: #fff; border-radius: 12px; padding: 6px 14px; min-width: 86px; border: 1px solid #f3e9cf; }
+.lv-num b { display: block; font-size: 22px; color: #b08a2e; }
+.lv-num b.danger { color: #e06060; }
+.lv-num span { font-size: 12px; color: #aab0c0; }
+.lv-num.hot { background: #fdecec; border-color: #f5c0c0; }
+.lv-names { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.lv-tag { margin: 0; }
+.lv-more { color: #aab0c0; font-size: 13px; }
+.lv-actions { flex-shrink: 0; display: flex; gap: 8px; }
 </style>
