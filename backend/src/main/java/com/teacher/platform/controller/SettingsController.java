@@ -62,6 +62,8 @@ public class SettingsController extends BaseController {
         upsertSetting(uid, "report_message", str(body.get("reportMessage")));
         // 班级宠物园：登记考勤/作业/纪律时自动扣宠物成长值总开关（'1'开 '0'关，请假不扣）
         upsertSetting(uid, "pet_auto_deduct", str(body.get("petAutoDeduct")));
+        // 侧边栏头像（emoji 字符）
+        upsertSetting(uid, "avatar", str(body.get("avatar")));
         return Result.ok();
     }
 

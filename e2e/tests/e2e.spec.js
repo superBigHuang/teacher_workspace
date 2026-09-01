@@ -847,6 +847,34 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.keyboard.press('Escape')
     })
 
+    // ============ 11g. 头像与班级设置 ============
+    await test.step('头像与班级：emoji 头像保存/弹窗选择/侧边栏显示；任课班新增后删除（自清理）', async () => {
+      // 头像：API 保存 🦊 → profile 读回 → 侧边栏显示
+      let r = await request.put(API + '/settings/profile', { headers: authHeader(), data: { avatar: '🦊' } })
+      expect((await r.json()).code).toBe(200)
+      const p = (await (await request.get(API + '/settings/profile', { headers: authHeader() })).json()).data
+      expect(p.avatar).toBe('🦊')
+      await page.goto('/dashboard')
+      await expect(page.locator('.user-avatar')).toContainText('🦊')
+      // UI：点头像弹窗选 🐰 → 侧边栏即时变 🐰
+      await page.locator('.user-avatar').click()
+      await expect(page.locator('.avatar-grid')).toBeVisible()
+      await page.locator('.avatar-opt', { hasText: '🐰' }).click()
+      await expect(page.locator('.user-avatar')).toContainText('🐰')
+      // 还原默认头像
+      await request.put(API + '/settings/profile', { headers: authHeader(), data: { avatar: '🐻' } })
+
+      // 任课班：新增 E2E临时班 → classes 含 → 删除 → 不含（连带课表清理，步骤内自清理）
+      const add = await request.post(API + '/timetable/class',
+        { headers: authHeader(), data: { name: 'E2E临时班', type: 'SUBJECT' } })
+      const cid = (await add.json()).data
+      let classes = (await (await request.get(API + '/timetable/classes', { headers: authHeader() })).json()).data
+      expect(classes.find(c => c.id === cid)).toBeTruthy()
+      await request.delete(API + '/timetable/class/' + cid, { headers: authHeader() })
+      classes = (await (await request.get(API + '/timetable/classes', { headers: authHeader() })).json()).data
+      expect(classes.find(c => c.id === cid)).toBeFalsy()
+    })
+
     // ============ 12. 刷新保持登录 ============
     await test.step('刷新页面后保持登录态（不跳回登录页）', async () => {
       await page.goto('/dashboard')

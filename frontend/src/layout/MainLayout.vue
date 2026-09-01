@@ -26,7 +26,7 @@
       <!-- 底部用户区 -->
       <div class="user-area">
         <div class="user-card">
-          <div class="user-avatar">🐻</div>
+          <div class="user-avatar" title="点击设置头像" @click="avatarDlg = true">{{ avatar }}</div>
           <div v-show="!collapsed" class="user-info">
             <div class="user-name">{{ displayName }}</div>
             <div class="user-school">{{ school || '未设置学校' }}</div>
@@ -49,29 +49,60 @@
     <main class="content">
       <router-view />
     </main>
+
+    <!-- 头像选择弹窗 -->
+    <el-dialog v-model="avatarDlg" title="选择头像" width="380px" align-center>
+      <div class="avatar-grid">
+        <button v-for="a in AVATARS" :key="a" class="avatar-opt"
+                :class="{ active: avatar === a }" @click="pickAvatar(a)">{{ a }}</button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import http from '../api/http'
+
+/** 可选头像 emoji（动物/笑脸/职业，马卡龙风格） */
+const AVATARS = [
+  '🐻','🐰','🐱','🐶','🦊','🐼','🐨','🦁','🐯','🐸','🐵','🐷','🐮','🐧','🦄','🐢',
+  '🐳','🦋','🐥','🦉','🐹','🐙','🦕','🐝','🦜','🐬','🦩','🐈','🐇','🦔',
+  '😊','🤓','😎','🥰','🤗','👩‍🏫','👨‍🏫','🧑‍🏫','🌞','🌈','⭐','🍀'
+]
 
 const router = useRouter()
 const collapsed = ref(false)
 const displayName = ref(localStorage.getItem('displayName') || '老师')
 const school = ref('')
+const avatar = ref(localStorage.getItem('avatar') || '🐻')
+const avatarDlg = ref(false)
 
-/** 拉取当前用户信息（显示名/学校），供侧边栏底部展示 */
+/** 拉取当前用户信息（显示名/学校/头像），供侧边栏底部展示 */
 onMounted(async () => {
   try {
     const me = await http.get('/auth/me')
     displayName.value = me.displayName || '老师'
     school.value = me.school || ''
     localStorage.setItem('displayName', displayName.value)
+    const p = await http.get('/settings/profile')
+    if (p.avatar) { avatar.value = p.avatar; localStorage.setItem('avatar', p.avatar) }
   } catch (e) { /* 未登录等情况忽略 */ }
 })
+
+/** 选择头像：即时保存到个人设置并刷新侧边栏 */
+async function pickAvatar(a) {
+  avatar.value = a
+  localStorage.setItem('avatar', a)
+  avatarDlg.value = false
+  try {
+    await http.put('/settings/profile', { avatar: a })
+    ElMessage.success('头像已更新')
+  } catch (e) { /* 网络异常时本地已切换，下次进页面重试 */ }
+}
 
 const navs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
@@ -141,7 +172,18 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
   width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
   background: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px;
   box-shadow: 0 3px 8px rgba(255,170,200,.4);
+  cursor: pointer; transition: transform .15s, box-shadow .15s;
 }
+.user-avatar:hover { transform: scale(1.12); box-shadow: 0 5px 14px rgba(255,150,190,.55); }
+
+/* 头像选择弹窗 */
+.avatar-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+.avatar-opt {
+  border: 2px solid transparent; border-radius: 12px; background: #f7f8fc;
+  font-size: 26px; padding: 6px 0; cursor: pointer; transition: transform .12s, background .12s;
+}
+.avatar-opt:hover { transform: scale(1.12); background: #fff0f6; }
+.avatar-opt.active { border-color: #f78fb3; background: #fde4ee; box-shadow: 0 0 0 3px rgba(247,143,179,.25); }
 .user-name { font-size: 14px; font-weight: 800; color: #6b5b73; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .user-school { font-size: 11px; color: #b7a6b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .user-actions { display: flex; flex-direction: column; gap: 4px; }

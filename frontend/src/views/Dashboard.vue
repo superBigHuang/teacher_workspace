@@ -11,10 +11,10 @@
               <div class="greet-sub">数据每日持续保存 · 最近更新 {{ updatedAt }}</div>
               <div class="class-tags">
                 <el-tag effect="dark" color="#f78fb3" class="ctag">班主任 · {{ homeroomName }}（{{ stats.studentTotal || 0 }}人）</el-tag>
-                <el-tag effect="plain" class="ctag">任课 · {{ subjectClassName }}</el-tag>
+                <el-tag v-for="n in subjectClassNames" :key="n" effect="plain" class="ctag">任课 · {{ n }}</el-tag>
               </div>
             </div>
-            <el-button :icon="Edit" circle @click="editDlg = true" />
+            <el-button :icon="Edit" circle @click="openEdit" />
           </div>
           <div class="motto-row"><span class="motto-label">校训</span><span>{{ settings.school_motto }}</span></div>
           <div class="motto-row"><span class="motto-label">个人箴言</span><span>{{ settings.personal_motto }}</span></div>
@@ -170,12 +170,29 @@
     </draggable>
 
     <!-- 编辑问候/设置 -->
-    <el-dialog v-model="editDlg" title="编辑工作台信息" width="460px">
+    <el-dialog v-model="editDlg" title="编辑工作台信息" width="500px">
       <el-form :model="settings" label-width="90px">
         <el-form-item label="教师姓名"><el-input v-model="settings.teacher_name" /></el-form-item>
         <el-form-item label="学期"><el-input v-model="settings.term" /></el-form-item>
         <el-form-item label="校训"><el-input v-model="settings.school_motto" /></el-form-item>
         <el-form-item label="个人箴言"><el-input v-model="settings.personal_motto" type="textarea" /></el-form-item>
+        <el-divider content-position="left">🏫 我的班级</el-divider>
+        <el-form-item label="班主任班">
+          <el-input v-model="classForm.homeName" placeholder="如：初一(1)班" />
+        </el-form-item>
+        <el-form-item label="任课班">
+          <div class="cls-list">
+            <div v-for="(c, i) in classForm.subjects" :key="c.id" class="cls-row">
+              <el-input v-model="c.name" size="small" />
+              <el-button size="small" text type="danger" @click="removeClass(i)">🗑 删除</el-button>
+            </div>
+            <div class="cls-row">
+              <el-input v-model="classForm.newSubject" size="small" placeholder="新增任课班名，如：初一(3)班" @keyup.enter="addClassRow" />
+              <el-button size="small" type="primary" plain @click="addClassRow">➕ 添加</el-button>
+            </div>
+            <div class="cls-hint">删除任课班会一并清除其课表与座次安排</div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="editDlg = false">取消</el-button>
@@ -208,7 +225,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import draggable from 'vuedraggable'
 import { Edit } from '@element-plus/icons-vue'
 import http from '../api/http'
@@ -221,8 +238,10 @@ const cardOrder = ref([])
 const todayCourses = ref([])
 const allStudents = ref([])
 const homeroomName = ref('初一(1)班')
-const subjectClassName = ref('初一(2)班')
+const subjectClassNames = ref(['初一(2)班'])
 const editDlg = ref(false)
+/** 编辑弹窗中的班级表单（班主任班 + 任课班列表） */
+const classForm = reactive({ homeId: null, homeName: '', subjects: [], newSubject: '' })
 const noteText = ref('')
 const parseDlg = ref(false)
 const entries = ref([])
@@ -270,9 +289,9 @@ async function saveOrder() { await http.post('/dashboard/cards', { order: cardOr
 async function loadTodayCourses() {
   const classes = await http.get('/timetable/classes')
   const home = classes.find(c => c.type === 'HOMEROOM') || classes[0]
-  const subj = classes.find(c => c.type === 'SUBJECT')
+  const subjNames = classes.filter(c => c.type === 'SUBJECT').map(c => c.name)
   if (home) homeroomName.value = home.name
-  if (subj) subjectClassName.value = subj.name
+  if (subjNames.length) subjectClassNames.value = subjNames
   if (!home) return
   const dow = new Date().getDay() || 7
   const grid = await http.get('/timetable/grid', { params: { classId: home.id } })
@@ -305,13 +324,56 @@ async function batchReturn() {
   loadStats()
 }
 
+/** 打开编辑弹窗：加载班级列表填入表单 */
+async function openEdit() {
+  editDlg.value = true
+  const classes = await http.get('/timetable/classes')
+  const home = classes.find(c => c.type === 'HOMEROOM')
+  classForm.homeId = home ? home.id : null
+  classForm.homeName = home ? home.name : ''
+  classForm.subjects = classes.filter(c => c.type === 'SUBJECT').map(c => ({ id: c.id, name: c.name }))
+  classForm.newSubject = ''
+}
+
+/** 弹窗内新增任课班（即时落库） */
+async function addClassRow() {
+  const name = classForm.newSubject.trim()
+  if (!name) { ElMessage.warning('请输入班级名称'); return }
+  const id = await http.post('/timetable/class', { name, type: 'SUBJECT', term: settings.term })
+  classForm.subjects.push({ id, name })
+  classForm.newSubject = ''
+  ElMessage.success('已添加任课班')
+}
+
+/** 弹窗内删除任课班（连带课表/座次清理） */
+async function removeClass(i) {
+  const c = classForm.subjects[i]
+  try {
+    await ElMessageBox.confirm(`删除任课班「${c.name}」？其课表与座次安排会一并删除。`, '提示', { type: 'warning' })
+  } catch { return }
+  await http.delete('/timetable/class/' + c.id)
+  classForm.subjects.splice(i, 1)
+  ElMessage.success('已删除')
+}
+
 async function saveSettings() {
   await http.post('/dashboard/settings', {
     teacher_name: settings.teacher_name, term: settings.term,
     school_motto: settings.school_motto, personal_motto: settings.personal_motto
   })
+  // 班级：班主任班改名或新建；任课班改名（删除/新增已在弹窗内即时处理）
+  const homeName = classForm.homeName.trim()
+  if (homeName) {
+    if (classForm.homeId) await http.put('/timetable/class/' + classForm.homeId, { name: homeName })
+    else await http.post('/timetable/class', { name: homeName, type: 'HOMEROOM', term: settings.term })
+  }
+  for (const c of classForm.subjects) {
+    const name = c.name.trim()
+    if (name) await http.put('/timetable/class/' + c.id, { name })
+  }
   ElMessage.success('已保存')
   editDlg.value = false
+  await loadTodayCourses()
 }
 async function delHoliday(id) {
   await http.delete('/dashboard/holiday/' + id)
@@ -390,7 +452,11 @@ onMounted(async () => {
 .greet-date { color: #8a8fa3; margin: 8px 0 2px; }
 .greet-sub { color: #b0b3c0; font-size: 12px; }
 .class-tags { margin-top: 12px; display: flex; gap: 10px; }
-.ctag { border: none; }
+.ctag { border: none; margin-right: 8px; }
+/* 编辑弹窗：班级管理 */
+.cls-list { width: 100%; }
+.cls-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cls-hint { font-size: 12px; color: #c0a898; margin-top: 2px; }
 .motto-row { margin-top: 12px; color: #6a6f82; }
 .motto-label { display: inline-block; width: 70px; color: #aab0c0; }
 .quick-card { height: 100%; border: 1px dashed #f0b8d0; }
