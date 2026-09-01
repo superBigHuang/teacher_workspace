@@ -13,6 +13,8 @@ export LOG_DIR="$APP_HOME/logs"              # 日志目录
 export REPO_URL="git@gitee.com:superBigHuang/teacher_workspace.git"
 export BACKEND_PORT=8088
 export SERVICE_NAME="teacher-backend"
+# 访问域名（ICP 备案通过后用于 HTTPS；未备案/仅 IP 访问时不影响 HTTP）
+export SERVER_NAME="${SERVER_NAME:-teach.pagekithub.com}"
 
 # ===== 工具链（vfox 管理）=====
 # 脚本自包含：不依赖登录 shell 的 profile.d，直接导出 JAVA_HOME 与 PATH

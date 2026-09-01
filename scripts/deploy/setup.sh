@@ -47,6 +47,7 @@ sed -e "s#__APP_HOME__#$APP_HOME#g" \
 log "5/6 注册 nginx 站点..."
 sed -e "s#__DIST_DIR__#$DIST_DIR#g" \
     -e "s#__BACKEND_PORT__#$BACKEND_PORT#g" \
+    -e "s#__SERVER_NAME__#$SERVER_NAME#g" \
     "$DEPLOY_DIR/nginx-teacher.conf" > /etc/nginx/conf.d/teacher-workplatform.conf
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
