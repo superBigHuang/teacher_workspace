@@ -2,52 +2,70 @@
 CREATE DATABASE IF NOT EXISTS teacher_workspace DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE teacher_workspace;
 
--- 用户（预留多用户）
+-- 用户（多老师账号；数据按 user_id 隔离）
 CREATE TABLE IF NOT EXISTS sys_user (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  username VARCHAR(64) NOT NULL UNIQUE,
+  username VARCHAR(64) NOT NULL UNIQUE COMMENT '登录账号',
   password_hash VARCHAR(128) NOT NULL,
-  display_name VARCHAR(64),
+  display_name VARCHAR(64) COMMENT '显示名/教师名',
+  email VARCHAR(128) COMMENT '邮箱',
+  school VARCHAR(128) COMMENT '学校名称',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 班级
-CREATE TABLE IF NOT EXISTS class_info (
+-- 学校名录（全校共享的输入记忆，跨账号可见）
+CREATE TABLE IF NOT EXISTS school_dict (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(64) NOT NULL,
-  type VARCHAR(16) NOT NULL COMMENT 'HOMEROOM 班主任班 / SUBJECT 任课班',
-  term VARCHAR(32)
+  name VARCHAR(128) NOT NULL UNIQUE,
+  use_count INT DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 学生
+-- 班级（per-user）
+CREATE TABLE IF NOT EXISTS class_info (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1 COMMENT '归属账号 sys_user.id',
+  name VARCHAR(64) NOT NULL,
+  type VARCHAR(16) NOT NULL COMMENT 'HOMEROOM 班主任班 / SUBJECT 任课班',
+  term VARCHAR(32),
+  KEY idx_class_user (user_id)
+);
+
+-- 学生（per-user；同一账号内学号唯一）
 CREATE TABLE IF NOT EXISTS student (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   stu_no VARCHAR(32) NOT NULL COMMENT '学号',
   name VARCHAR(64) NOT NULL,
   gender VARCHAR(8) DEFAULT '男',
   class_id BIGINT,
   address VARCHAR(255),
-  UNIQUE KEY uk_stuno (stu_no)
+  UNIQUE KEY uk_user_stuno (user_id, stu_no),
+  KEY idx_stu_user (user_id)
 );
 
--- 家长联系方式
+-- 家长联系方式（per-user）
 CREATE TABLE IF NOT EXISTS parent_contact (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   student_id BIGINT NOT NULL,
   relation VARCHAR(16) COMMENT '父亲/母亲/其他',
   name VARCHAR(64),
-  phone VARCHAR(32)
+  phone VARCHAR(32),
+  KEY idx_pc_user (user_id)
 );
 
--- 科目
+-- 科目（per-user）
 CREATE TABLE IF NOT EXISTS subject (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   name VARCHAR(32) NOT NULL,
   teacher VARCHAR(64),
-  color VARCHAR(16)
+  color VARCHAR(16),
+  KEY idx_subject_user (user_id)
 );
 
--- 节次
+-- 节次（全局共享模板，所有账号通用）
 CREATE TABLE IF NOT EXISTS period (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   name VARCHAR(32) NOT NULL,
@@ -57,141 +75,171 @@ CREATE TABLE IF NOT EXISTS period (
   is_break TINYINT DEFAULT 0 COMMENT '跑操/午休等不可排课'
 );
 
--- 课表
+-- 课表（per-user，经 class_id 归属）
 CREATE TABLE IF NOT EXISTS timetable (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   class_id BIGINT NOT NULL,
   day_of_week INT NOT NULL COMMENT '1-7 周一到周日',
   period_id BIGINT NOT NULL,
   subject_id BIGINT NOT NULL,
-  UNIQUE KEY uk_slot (class_id, day_of_week, period_id)
+  UNIQUE KEY uk_slot (class_id, day_of_week, period_id),
+  KEY idx_tt_user (user_id)
 );
 
--- 座次配置
+-- 座次配置（per-user）
 CREATE TABLE IF NOT EXISTS seat_config (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   class_id BIGINT NOT NULL UNIQUE,
   `rows` INT DEFAULT 7,
   cols INT DEFAULT 8,
   aisles VARCHAR(64) COMMENT '过道列，JSON 数组如 [2,4,6]'
 );
 
--- 座位分配
+-- 座位分配（per-user）
 CREATE TABLE IF NOT EXISTS seat_assignment (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   class_id BIGINT NOT NULL,
   row_no INT NOT NULL,
   col_no INT NOT NULL,
   student_id BIGINT,
-  UNIQUE KEY uk_seat (class_id, row_no, col_no)
+  UNIQUE KEY uk_seat (class_id, row_no, col_no),
+  KEY idx_sa_user (user_id)
 );
 
--- 值日事项
+-- 值日事项（per-user）
 CREATE TABLE IF NOT EXISTS duty_task (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(64) NOT NULL
+  user_id BIGINT NOT NULL DEFAULT 1,
+  name VARCHAR(64) NOT NULL,
+  KEY idx_dt_user (user_id)
 );
 
--- 每日值日人数
+-- 每日值日人数（per-user；同一账号每天一条）
 CREATE TABLE IF NOT EXISTS duty_config (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  day_of_week INT NOT NULL UNIQUE COMMENT '1-5 周一到周五',
-  person_count INT DEFAULT 4
+  user_id BIGINT NOT NULL DEFAULT 1,
+  day_of_week INT NOT NULL COMMENT '1-5 周一到周五',
+  person_count INT DEFAULT 4,
+  UNIQUE KEY uk_user_day (user_id, day_of_week)
 );
 
 -- 值日名单（task_id 为该学生当天分配的值日事项，任务到人）
 CREATE TABLE IF NOT EXISTS duty_roster (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   day_of_week INT NOT NULL,
   student_id BIGINT NOT NULL,
   task_id BIGINT NULL COMMENT '分配的值日事项 duty_task.id',
-  round INT DEFAULT 1
+  round INT DEFAULT 1,
+  KEY idx_dr_user (user_id)
 );
 
--- 班委
+-- 班委（per-user）
 CREATE TABLE IF NOT EXISTS committee (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   student_id BIGINT NOT NULL,
-  role VARCHAR(32)
+  role VARCHAR(32),
+  KEY idx_comm_user (user_id)
 );
 
--- 考试
+-- 考试（per-user）
 CREATE TABLE IF NOT EXISTS exam (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   name VARCHAR(64) NOT NULL,
   exam_date DATE,
-  source_file VARCHAR(255)
+  source_file VARCHAR(255),
+  KEY idx_exam_user (user_id)
 );
 
--- 成绩
+-- 成绩（per-user）
 CREATE TABLE IF NOT EXISTS score (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   exam_id BIGINT NOT NULL,
   student_id BIGINT,
   subject VARCHAR(32) NOT NULL,
   score DECIMAL(6,2),
   stu_no VARCHAR(32),
-  stu_name VARCHAR(64)
+  stu_name VARCHAR(64),
+  KEY idx_score_user (user_id)
 );
 
--- 家校沟通记录
+-- 家校沟通记录（per-user）
 CREATE TABLE IF NOT EXISTS comm_log (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   student_id BIGINT,
   parent_id BIGINT,
   contact_date DATE,
   method VARCHAR(16),
   content VARCHAR(1000),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_cl_user (user_id)
 );
 
--- 待办
+-- 待办（per-user）
 CREATE TABLE IF NOT EXISTS todo (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   title VARCHAR(255) NOT NULL,
   category VARCHAR(16) DEFAULT '其他' COMMENT '教学/班级/家校/其他',
   due_date DATE,
   done TINYINT DEFAULT 0,
   source VARCHAR(16) DEFAULT 'MANUAL' COMMENT 'MANUAL/QUICK',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_todo_user (user_id)
 );
 
--- 考勤
+-- 考勤（per-user）
 CREATE TABLE IF NOT EXISTS attendance (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   record_date DATE NOT NULL,
   student_id BIGINT NOT NULL,
   status VARCHAR(8) DEFAULT '出勤' COMMENT '出勤/迟到/请假/缺勤',
-  UNIQUE KEY uk_att (record_date, student_id)
+  leave_id BIGINT NULL COMMENT '联动生成的请假单 id（删单时据此回滚，手动标记为空）',
+  UNIQUE KEY uk_att (record_date, student_id),
+  KEY idx_att_user (user_id)
 );
 
--- 课堂纪律
+-- 课堂纪律（per-user）
 CREATE TABLE IF NOT EXISTS discipline_log (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   record_date DATE NOT NULL,
   student_id BIGINT NOT NULL,
-  content VARCHAR(1000)
+  content VARCHAR(1000),
+  KEY idx_dl_user (user_id)
 );
 
--- 作业收缴
+-- 作业收缴（per-user）
 CREATE TABLE IF NOT EXISTS homework_check (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   record_date DATE NOT NULL,
   subject VARCHAR(32),
   student_id BIGINT NOT NULL,
   status VARCHAR(8) DEFAULT '交' COMMENT '交/未交',
-  UNIQUE KEY uk_hw (record_date, subject, student_id)
+  UNIQUE KEY uk_hw (record_date, subject, student_id),
+  KEY idx_hw_user (user_id)
 );
 
--- 速记原文
+-- 速记原文（per-user）
 CREATE TABLE IF NOT EXISTS quick_note (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   content TEXT,
   parsed_json TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_qn_user (user_id)
 );
 
--- 速记规则
+-- 速记规则（全局共享关键词模板）
 CREATE TABLE IF NOT EXISTS quick_note_rule (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   module_key VARCHAR(16) NOT NULL,
@@ -199,23 +247,170 @@ CREATE TABLE IF NOT EXISTS quick_note_rule (
   enabled TINYINT DEFAULT 1
 );
 
--- 节假日
+-- 节假日（per-user）
 CREATE TABLE IF NOT EXISTS holiday (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
   name VARCHAR(32) NOT NULL,
-  holiday_date DATE NOT NULL
+  holiday_date DATE NOT NULL,
+  KEY idx_hol_user (user_id)
 );
 
--- 工作台卡片顺序
+-- 工作台卡片顺序（per-user）
 CREATE TABLE IF NOT EXISTS card_config (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  card_key VARCHAR(32) NOT NULL UNIQUE,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  card_key VARCHAR(32) NOT NULL,
   sort_order INT DEFAULT 0,
-  visible TINYINT DEFAULT 1
+  visible TINYINT DEFAULT 1,
+  UNIQUE KEY uk_user_card (user_id, card_key)
 );
 
--- 全局设置
+-- 请假记录（per-user；病假/事假/公假台账，销假闭环）
+CREATE TABLE IF NOT EXISTS leave_record (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  leave_type VARCHAR(8) NOT NULL COMMENT '病假/事假/公假',
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  days DECIMAL(4,1) DEFAULT 1 COMMENT '请假天数，支持 0.5 半天',
+  reason VARCHAR(500),
+  notify_method VARCHAR(16) COMMENT '家长告知方式：微信/电话/书面/口头',
+  status VARCHAR(8) DEFAULT 'ACTIVE' COMMENT 'ACTIVE 请假中 / DONE 已销假',
+  return_date DATE COMMENT '实际返校销假日',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_lr_user_stu (user_id, student_id),
+  KEY idx_lr_user_status (user_id, status, end_date)
+);
+
+-- 期末评语（per-user；每生每学期一条，唯一键约束；AI/模板生成后老师可编辑保存）
+CREATE TABLE IF NOT EXISTS `comment` (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  term VARCHAR(40) NOT NULL COMMENT '学期标识：term_start~term_end',
+  content TEXT COMMENT '评语正文',
+  source VARCHAR(16) DEFAULT 'manual' COMMENT 'ai/template/manual 来源',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_comment (user_id, student_id, term),
+  KEY idx_cmt_user (user_id)
+);
+
+-- 成就定义（user_id=0 为系统内置模板全局共享 UNION 可见；>0 为老师自定义）
+CREATE TABLE IF NOT EXISTS achievement_def (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 0 COMMENT '0=系统内置；>0=老师自定义',
+  name VARCHAR(64) NOT NULL COMMENT '成就名称',
+  description VARCHAR(500) COMMENT '如何获得（灰色徽章悬停展示）',
+  icon VARCHAR(32) COMMENT '图标名（frontend/public/badges 下 PNG 文件名，不含扩展名）',
+  tier VARCHAR(16) NOT NULL COMMENT 'BRONZE铜/SILVER银/GOLD金/PLATINUM白金',
+  kind VARCHAR(8) NOT NULL DEFAULT 'MANUAL' COMMENT 'MANUAL 手动 / AUTO 自动',
+  rule_type VARCHAR(32) COMMENT 'AUTO 规则类型：PERFECT_ATTENDANCE/PERFECT_HOMEWORK/PERFECT_DISCIPLINE/RANK_UP/ALL_EXCELLENT/SUBJECT_TOP/SCORE_FULL/DUTY_COUNT/COMMITTEE/CONTINUOUS_ATTENDANCE/COLLECTOR',
+  rule_params VARCHAR(200) COMMENT '规则参数 JSON，如 {"minRankUp":5}',
+  enabled TINYINT DEFAULT 1 COMMENT '启用状态（内置可停用不可删）',
+  builtin TINYINT DEFAULT 0 COMMENT '1=系统内置',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_ad_user (user_id)
+);
+
+-- 学生成就获得记录（per-user；同一成就每学期每生最多一枚，幂等）
+CREATE TABLE IF NOT EXISTS student_achievement (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  def_id BIGINT NOT NULL,
+  term VARCHAR(40) NOT NULL COMMENT '学期标识：term_start~term_end',
+  source VARCHAR(8) DEFAULT 'AUTO' COMMENT 'AUTO 扫描颁发 / MANUAL 老师授予',
+  remark VARCHAR(255) COMMENT '手动授予备注，如"校运会跳远第一"',
+  awarded_at DATE COMMENT '获得日期',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_sa (user_id, student_id, def_id, term),
+  KEY idx_sa_user (user_id),
+  KEY idx_sa_student (user_id, student_id)
+);
+
+-- 班级宠物园：学生宠物（per-user；一个学生一只，形态由 level 推导：0=蛋 1~5=五阶）
+CREATE TABLE IF NOT EXISTS pet (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  pet_key VARCHAR(16) NOT NULL DEFAULT 'dragon' COMMENT '进化链标识，v1 只有 dragon 云小龙',
+  pet_name VARCHAR(32) COMMENT '宠物中文名（领养时起名）',
+  level INT NOT NULL DEFAULT 1 COMMENT '等级 1~5',
+  exp INT NOT NULL DEFAULT 0 COMMENT '累计成长值（满级封顶 280）',
+  adopted_at DATETIME COMMENT '领养时间',
+  graduated_count INT NOT NULL DEFAULT 0 COMMENT '毕业次数（荣誉榜徽章数）',
+  UNIQUE KEY uk_pet_student (user_id, student_id),
+  KEY idx_pet_user (user_id)
+);
+
+-- 宠物评价项（per-user；预置 ~35 项可改分/停用，可自定义增删）
+CREATE TABLE IF NOT EXISTS pet_rule (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  category VARCHAR(8) NOT NULL COMMENT '学习/行为/健康/其他',
+  name VARCHAR(32) NOT NULL,
+  score INT NOT NULL COMMENT '成长值变动（正=加分，负=扣分）',
+  icon VARCHAR(8) COMMENT 'emoji 图标',
+  enabled TINYINT DEFAULT 1,
+  auto_source VARCHAR(32) DEFAULT NULL COMMENT '自动联动来源标识；NULL=纯手动项',
+  KEY idx_pr_user (user_id)
+);
+
+-- 宠物成长值流水（per-user；biz_ref 幂等防自动联动重复扣分）
+CREATE TABLE IF NOT EXISTS pet_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  rule_id BIGINT NULL COMMENT '手动评价关联 pet_rule.id；自动联动为空',
+  score INT NOT NULL COMMENT '本次变动分值（带正负）',
+  source VARCHAR(24) NOT NULL DEFAULT 'MANUAL' COMMENT 'MANUAL/AUTO_ATTENDANCE/AUTO_HOMEWORK/AUTO_DISCIPLINE/AUTO_SCORE',
+  biz_ref VARCHAR(64) NULL COMMENT '业务记录标识（如 attendance:123），自动联动幂等用',
+  remark VARCHAR(128) COMMENT '事项名/备注（如"迟到""兑换xxx"）',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_pl_user_stu (user_id, student_id),
+  KEY idx_pl_biz (user_id, source, biz_ref)
+);
+
+-- 宠物毕业徽章墙（per-user；每次毕业一枚）
+CREATE TABLE IF NOT EXISTS pet_badge (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  pet_key VARCHAR(16) NOT NULL,
+  pet_name VARCHAR(32),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_pb_user_stu (user_id, student_id)
+);
+
+-- 小商店商品（per-user；stock=-1 表示不限库存）
+CREATE TABLE IF NOT EXISTS pet_shop_item (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  name VARCHAR(32) NOT NULL,
+  icon VARCHAR(8) COMMENT 'emoji 图标',
+  price INT NOT NULL COMMENT '兑换所需成长值',
+  stock INT NOT NULL DEFAULT -1 COMMENT '库存，-1=不限',
+  KEY idx_psi_user (user_id)
+);
+
+-- 小商店兑换记录（per-user；待兑现→已兑现，线下履约记账）
+CREATE TABLE IF NOT EXISTS pet_exchange (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  student_id BIGINT NOT NULL,
+  item_id BIGINT NOT NULL,
+  cost INT NOT NULL COMMENT '兑换时扣减的成长值',
+  status VARCHAR(8) NOT NULL DEFAULT '待兑现' COMMENT '待兑现/已兑现',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_pe_user (user_id)
+);
+
+-- 全局设置（per-user，键值按账号隔离）
 CREATE TABLE IF NOT EXISTS setting (
-  k VARCHAR(64) PRIMARY KEY,
-  v VARCHAR(500)
+  user_id BIGINT NOT NULL DEFAULT 1,
+  k VARCHAR(64) NOT NULL,
+  v VARCHAR(500),
+  PRIMARY KEY (user_id, k)
 );

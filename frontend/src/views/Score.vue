@@ -12,6 +12,8 @@
       </el-select>
       <el-button type="primary" :icon="Upload" @click="importDlg = true">导入成绩</el-button>
       <el-button :icon="Setting" @click="openStd">标准</el-button>
+      <el-button type="warning" plain @click="openReport">📄 家长通知单</el-button>
+      <el-button type="success" plain @click="openPetAwards">🎁 宠物发奖</el-button>
       <el-button type="danger" plain :icon="Delete" @click="delExam">删除考试</el-button>
     </div>
 
@@ -124,12 +126,71 @@
         <el-button type="primary" @click="saveStd">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 家长通知单配置弹窗 -->
+    <el-dialog v-model="reportDlg" title="📄 家长成绩通知单" width="540px">
+      <el-form label-width="100px">
+        <el-form-item label="考试">
+          <el-select v-model="reportForm.examId" style="width:100%">
+            <el-option v-for="e in exams" :key="e.id" :label="e.name" :value="e.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="对比考试">
+          <el-select v-model="reportForm.compareExamId" clearable style="width:100%" placeholder="不选则不显示进退步">
+            <el-option v-for="e in exams" :key="e.id" :label="e.name" :value="e.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="附带内容">
+          <el-checkbox v-model="reportForm.showDaily">本学期在校表现（迟到/请假/作业/纪律）</el-checkbox>
+          <el-checkbox v-model="reportForm.showMessage">教师寄语</el-checkbox>
+        </el-form-item>
+        <template v-if="reportForm.showMessage">
+          <el-form-item label="寄语方式">
+            <el-radio-group v-model="reportForm.messageMode">
+              <el-radio value="ai">✨ AI 逐人生成</el-radio>
+              <el-radio value="uniform">统一寄语</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="统一寄语">
+            <el-input v-model="reportForm.uniformMessage" type="textarea" :rows="2"
+              placeholder="AI 失败时的兜底；选「统一寄语」时全员使用。留空则用个人设置中的通知单统一寄语" />
+          </el-form-item>
+        </template>
+        <el-form-item v-if="reportLoading" label="生成进度">
+          <el-progress :percentage="reportProgress" :stroke-width="14" striped striped-flow />
+          <span class="rp-tip">AI 正在逐人撰写寄语（约 1 分钟/人），可离开本页稍后回来，请勿关闭浏览器…</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reportDlg = false">取消</el-button>
+        <el-button type="primary" :loading="reportLoading" @click="genReport">生成并打开打印版</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 宠物成绩发奖：满分+3 / 全科优秀+2 / 排名进步≥5名+2，每人取最高一项 -->
+    <el-dialog v-model="awardDlg" title="🎁 宠物成绩发奖" width="520px">
+      <p class="award-tip">规则：单科满分 <b>+3</b>、全科达优秀线 <b>+2</b>、较上场排名进步≥5名 <b>+2</b>（每人取最高一项；已发过的自动跳过，未领养宠物的学生不产生积分）</p>
+      <div v-if="!awardList.length" class="award-empty">本场考试暂无可发奖的学生 🍬</div>
+      <div v-for="a in awardList" :key="a.studentId" class="award-row" :class="{ granted: a.granted }">
+        <el-checkbox v-model="a.checked" :disabled="a.granted" />
+        <span class="award-name">{{ a.name }}</span>
+        <span class="award-reason">{{ a.reason }}</span>
+        <el-tag :type="a.score >= 3 ? 'warning' : 'success'" effect="dark">+{{ a.score }}</el-tag>
+        <span v-if="a.granted" class="award-done">✅ 已发</span>
+      </div>
+      <template #footer>
+        <el-button @click="awardDlg = false">关闭</el-button>
+        <el-button type="primary" :disabled="!awardList.some(a => a.checked && !a.granted)" @click="grantAwards">
+          🐉 发放所选（{{ awardList.filter(a => a.checked && !a.granted).length }} 人）
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, nextTick, watch, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Upload, Setting, Delete } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '../api/http'
@@ -150,6 +211,91 @@ const importDlg = ref(false)
 const importForm = reactive({ name: '', date: '', file: null })
 const stdDlg = ref(false)
 const stdForm = reactive({ passLine: 60, excellentLine: 85 })
+
+// 家长通知单
+const reportDlg = ref(false)
+const reportLoading = ref(false)
+const reportProgress = ref(0)
+const reportForm = reactive({
+  examId: null, compareExamId: null,
+  showDaily: true, showMessage: true,
+  messageMode: 'ai', uniformMessage: '',
+})
+
+function openReport() {
+  if (!curExam.value) { ElMessage.warning('请先选择考试'); return }
+  reportForm.examId = curExam.value
+  reportForm.compareExamId = cmpExam.value || null
+  reportDlg.value = true
+}
+
+// 宠物成绩发奖（满分/优秀/进步三类，每人取最高一项，幂等可重复打开）
+const awardDlg = ref(false)
+const awardList = ref([])
+async function openPetAwards() {
+  if (!curExam.value) { ElMessage.warning('请先选择考试'); return }
+  awardDlg.value = true
+  const list = await http.get('/pet/score-awards', { params: { examId: curExam.value } })
+  awardList.value = list.map(a => ({ ...a, checked: !a.granted }))
+}
+async function grantAwards() {
+  const items = awardList.value.filter(a => a.checked && !a.granted)
+    .map(a => ({ studentId: a.studentId, score: a.score, reason: a.reason }))
+  if (!items.length) return
+  const r = await http.post('/pet/score-awards/grant', { examId: curExam.value, items })
+  ElMessage.success(`发奖完成，${r.affected} 只宠物获得成长值 🐉✨`)
+  const list = await http.get('/pet/score-awards', { params: { examId: curExam.value } })
+  awardList.value = list.map(a => ({ ...a, checked: false }))
+}
+
+/**
+ * 生成通知单：拉报告数据包 → 可选 AI 并发(3)逐人生成寄语（单人失败保留统一寄语）
+ * → 写 sessionStorage → 新窗口打开 A4 打印页。
+ */
+async function genReport() {
+  reportLoading.value = true
+  reportProgress.value = 0
+  try {
+    const data = await http.get('/score/report', {
+      params: { examId: reportForm.examId, compareExamId: reportForm.compareExamId || undefined },
+    })
+    // 统一寄语兜底：弹窗输入优先，其次个人设置中的 report_message
+    const uniform = reportForm.uniformMessage.trim() || data.reportMessage || ''
+    data.students.forEach(s => { s.comment = uniform; s.aiSource = false })
+
+    if (reportForm.showMessage && reportForm.messageMode === 'ai') {
+      // 并发 3 逐人生成寄语；失败的人保留统一寄语
+      const queue = [...data.students]
+      let done = 0
+      const worker = async () => {
+        while (queue.length) {
+          const s = queue.shift()
+          try {
+            const r = await http.post('/ai/generate', { scene: 'message', studentId: s.studentId })
+            if (r && r.content) {
+              s.comment = r.content
+              s.aiSource = r.source === 'ai'
+            }
+          } catch (e) { /* 单人失败不阻断，保留统一寄语 */ }
+          done++
+          reportProgress.value = Math.round(done * 100 / data.students.length)
+        }
+      }
+      await Promise.all([worker(), worker(), worker()])
+    }
+    if (!reportForm.showMessage) data.students.forEach(s => { s.comment = '' })
+
+    sessionStorage.setItem('scoreReportData', JSON.stringify({
+      data,
+      opts: { showDaily: reportForm.showDaily, showMessage: reportForm.showMessage },
+    }))
+    window.open('/print/report', '_blank')
+    reportDlg.value = false
+  } finally {
+    reportLoading.value = false
+    reportProgress.value = 0
+  }
+}
 
 async function loadExams() {
   exams.value = await http.get('/score/exams')
@@ -220,9 +366,26 @@ async function doImport(opt) {
   fd.append('examDate', importForm.date || '')
   const r = await http.post('/score/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
   ElMessage.success(`导入成功：${r.students} 名学生，${r.subjects} 个科目`)
+  // 导入后后端自动扫描成就，有新颁发则弹庆祝通知
+  if (r.newAwards?.length) notifyAchievements(r.newAwards)
   importDlg.value = false
   importForm.name = ''; importForm.date = ''
   await loadExams()
+}
+
+/** 成绩导入触发的新成就合并庆祝通知（按成就分组，最多列 5 条） */
+function notifyAchievements(list) {
+  const byDef = {}
+  list.forEach(a => { (byDef[a.defName] ||= []).push(a.name) })
+  const lines = Object.entries(byDef).slice(0, 5).map(([def, names]) => {
+    const shown = names.slice(0, 3).join('、')
+    return `🏅 ${shown}${names.length > 3 ? ` 等 ${names.length} 人` : ''} 获得「${def}」`
+  })
+  ElNotification({
+    title: `🎉 新成就解锁（共 ${list.length} 枚）`,
+    message: lines.join('<br>'),
+    dangerouslyUseHTMLString: true, duration: 8000, type: 'success'
+  })
 }
 
 async function delExam() {
@@ -276,4 +439,17 @@ onMounted(loadExams)
 .down { color: #f56c6c; font-weight: 700; }
 :deep(.up) { color: #67c23a; font-weight: 700; }
 :deep(.down) { color: #f56c6c; font-weight: 700; }
+.rp-tip { display: block; margin-top: 6px; color: #b08a2e; font-size: 12px; }
+
+/* 宠物成绩发奖弹窗 */
+.award-tip { font-size: 12px; color: #a08a70; line-height: 1.7; background: #fff7ec; border-radius: 12px; padding: 8px 12px; margin: 0 0 12px; }
+.award-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px;
+  background: #f6f9f7; margin-bottom: 7px; font-size: 14px;
+}
+.award-row.granted { opacity: .55; }
+.award-name { font-weight: 800; color: #5a5f72; width: 76px; }
+.award-reason { flex: 1; color: #8a7f8a; font-size: 13px; }
+.award-done { color: #67c23a; font-size: 12px; font-weight: 700; }
+.award-empty { text-align: center; color: #b8a8b0; padding: 30px 0; }
 </style>

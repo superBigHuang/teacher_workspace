@@ -23,9 +23,25 @@
         </router-link>
       </nav>
 
-      <div class="sidebar-foot" @click="logout">
-        <el-icon><SwitchButton /></el-icon>
-        <span v-show="!collapsed">退出登录</span>
+      <!-- 底部用户区 -->
+      <div class="user-area">
+        <div class="user-card">
+          <div class="user-avatar">🐻</div>
+          <div v-show="!collapsed" class="user-info">
+            <div class="user-name">{{ displayName }}</div>
+            <div class="user-school">{{ school || '未设置学校' }}</div>
+          </div>
+        </div>
+        <div class="user-actions">
+          <router-link to="/settings" class="action-item" title="个人设置">
+            <el-icon><Setting /></el-icon>
+            <span v-show="!collapsed">个人设置</span>
+          </router-link>
+          <div class="action-item logout" @click="logout" title="退出登录">
+            <el-icon><SwitchButton /></el-icon>
+            <span v-show="!collapsed">退出登录</span>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -37,17 +53,33 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Setting } from '@element-plus/icons-vue'
+import http from '../api/http'
 
 const router = useRouter()
 const collapsed = ref(false)
+const displayName = ref(localStorage.getItem('displayName') || '老师')
+const school = ref('')
+
+/** 拉取当前用户信息（显示名/学校），供侧边栏底部展示 */
+onMounted(async () => {
+  try {
+    const me = await http.get('/auth/me')
+    displayName.value = me.displayName || '老师'
+    school.value = me.school || ''
+    localStorage.setItem('displayName', displayName.value)
+  } catch (e) { /* 未登录等情况忽略 */ }
+})
 
 const navs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
   { path: '/duty', title: '值日表·班委', icon: 'Brush', color: '#52b788', bg: '#e4f6ec' },
+  { path: '/pet', title: '🐾 宠物园', icon: 'Sunny', color: '#ff9f5a', bg: '#fff0e0' },
   { path: '/score', title: '成绩分析', icon: 'TrendCharts', color: '#9b6dd6', bg: '#f0e8fb' },
+  { path: '/comment', title: '期末评语', icon: 'EditPen', color: '#e06aa8', bg: '#fde7f3' },
   { path: '/roster', title: '花名册', icon: 'Notebook', color: '#d9a52e', bg: '#fbf2d6' },
   { path: '/parent', title: '家长联系方式', icon: 'Phone', color: '#e08a4b', bg: '#fdeede' },
   { path: '/timetable', title: '课程表', icon: 'Calendar', color: '#f06292', bg: '#fde4ee' },
@@ -57,6 +89,7 @@ const navs = [
 function logout() {
   localStorage.removeItem('token')
   localStorage.removeItem('displayName')
+  localStorage.removeItem('username')
   router.push('/login')
 }
 </script>
@@ -64,16 +97,20 @@ function logout() {
 <style scoped>
 .layout { display: flex; min-height: 100vh; }
 .sidebar {
-  width: 212px; flex-shrink: 0; background: #fff; padding: 18px 12px;
+  width: 212px; flex-shrink: 0;
+  background: linear-gradient(180deg, #fffdf8 0%, #fff5ef 100%);
+  padding: 18px 12px;
   display: flex; flex-direction: column; transition: width .2s;
-  box-shadow: 2px 0 12px rgba(120,130,160,.06);
+  box-shadow: 2px 0 16px rgba(220,170,190,.12);
+  border-right: 3px solid #fff;
 }
 .sidebar.collapsed { width: 76px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 14px; }
 .logo {
-  width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
-  background: linear-gradient(135deg, #f78fb3, #f4a8c6);
+  width: 46px; height: 46px; border-radius: 16px; flex-shrink: 0;
+  background: linear-gradient(135deg, #ff9ec4, #ffb38a);
   color: #fff; font-size: 22px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 5px 14px rgba(255,160,190,.5);
 }
 .brand-title { font-size: 17px; font-weight: 800; color: #4a4a55; }
 .brand-sub { font-size: 12px; color: #b0b3c0; margin-top: 2px; }
@@ -94,10 +131,28 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
   background: var(--navbg); color: var(--nav);
   box-shadow: inset 3px 0 0 var(--nav);
 }
-.sidebar-foot {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 10px; color: #b0b3c0; cursor: pointer; font-size: 13px;
+/* 底部用户区 */
+.user-area { margin-top: 10px; }
+.user-card {
+  display: flex; align-items: center; gap: 10px; padding: 10px;
+  background: linear-gradient(135deg, #fff0f6, #fff7e8);
+  border-radius: 16px; margin-bottom: 8px;
 }
-.sidebar-foot:hover { color: #f06292; }
+.user-avatar {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+  background: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px;
+  box-shadow: 0 3px 8px rgba(255,170,200,.4);
+}
+.user-name { font-size: 14px; font-weight: 800; color: #6b5b73; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-school { font-size: 11px; color: #b7a6b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-actions { display: flex; flex-direction: column; gap: 4px; }
+.action-item {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 12px;
+  color: #9a8fa0; cursor: pointer; font-size: 13px; text-decoration: none; transition: all .15s;
+}
+.action-item:hover { background: #fdf1f6; color: #f06292; }
+.action-item.logout:hover { background: #fdf1f1; color: #f07070; }
+.sidebar.collapsed .user-card { justify-content: center; }
+.sidebar.collapsed .action-item { justify-content: center; }
 .content { flex: 1; padding: 22px 26px; overflow: auto; }
 </style>

@@ -5,113 +5,128 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Component;
 
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 首次启动种子数据：默认账号、班级、科目、节次、规则、节假日、卡片顺序、默认设置
+ * 启动初始化：
+ * 1) 幂等迁移：为旧库补 user_id 列、调整多用户唯一约束；
+ * 2) 全局模板种子（节次、速记规则，所有账号共享）；
+ * 3) 默认 admin 账号及其默认数据（经 UserDataSeeder）。
  */
 @Component
 public class DataInitializer implements CommandLineRunner {
 
     private final JdbcTemplate jdbc;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+    private final UserDataSeeder seeder;
 
-    public DataInitializer(JdbcTemplate jdbc) {
+    public DataInitializer(JdbcTemplate jdbc, UserDataSeeder seeder) {
         this.jdbc = jdbc;
+        this.seeder = seeder;
     }
+
+    /** 需要按账号隔离的业务表 */
+    private static final String[] USER_TABLES = {
+            "class_info", "student", "parent_contact", "subject", "timetable", "seat_config",
+            "seat_assignment", "duty_task", "duty_config", "duty_roster", "committee", "exam",
+            "score", "comm_log", "todo", "attendance", "discipline_log", "homework_check",
+            "quick_note", "holiday", "card_config", "setting",
+            "pet", "pet_rule", "pet_log", "pet_badge", "pet_shop_item", "pet_exchange"
+    };
 
     @Override
     public void run(String... args) {
         migrate();
-        seedUser();
-        seedClasses();
-        seedSettings();
-        seedSubjects();
-        seedPeriods();
-        seedRules();
-        seedHolidays();
-        seedCards();
-        seedDutyDefaults();
+        seedGlobalPeriods();
+        seedGlobalRules();
+        seedBuiltinAchievements();
+        seedAdmin();
     }
 
-    /** 数据库结构迁移：为已存在的旧库补充新增列（幂等，新库建表已含则跳过） */
+    // ---------- 迁移 ----------
     private void migrate() {
+        // sys_user 新增字段
+        ensureColumn("sys_user", "email", "email VARCHAR(128)");
+        ensureColumn("sys_user", "school", "school VARCHAR(128)");
+        // 业务表补 user_id（现有行自动取 DEFAULT 1，即 admin）
+        for (String t : USER_TABLES) {
+            ensureColumn(t, "user_id", "user_id BIGINT NOT NULL DEFAULT 1");
+        }
         ensureColumn("duty_roster", "task_id", "task_id BIGINT NULL COMMENT '分配的值日事项'");
+        // 考勤关联请假单：请假登记自动写入的考勤带 leave_id，删单时精确回滚（手动标记不受影响）
+        ensureColumn("attendance", "leave_id", "leave_id BIGINT NULL COMMENT '关联请假单 leave_record.id'");
+
+        // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
+        rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");
+        rebuildUniqueIndex("duty_config", "day_of_week", "uk_user_day", "user_id, day_of_week");
+        rebuildUniqueIndex("card_config", "card_key", "uk_user_card", "user_id, card_key");
+        rebuildSettingPrimaryKey();
     }
 
     /** 若指定表缺少某列则 ALTER 增加；通过 JDBC 元数据判断，保证可重复执行 */
     private void ensureColumn(String table, String column, String columnDef) {
         try {
-            boolean exists;
-            try (java.sql.Connection conn = jdbc.getDataSource().getConnection();
-                 java.sql.ResultSet rs = conn.getMetaData().getColumns(conn.getCatalog(), null, table, column)) {
-                exists = rs.next();
-            }
-            if (!exists) {
+            if (!columnExists(table, column)) {
                 jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + columnDef);
             }
         } catch (Exception e) {
-            // 迁移异常不阻断启动（如新库建表已含该列、或无权限等）
             System.out.println("[migrate] 跳过 " + table + "." + column + "：" + e.getMessage());
         }
     }
 
-    private Integer count(String sql) {
-        return jdbc.queryForObject(sql, Integer.class);
-    }
-
-    private void seedUser() {
-        if (count("SELECT COUNT(*) FROM sys_user") == 0) {
-            jdbc.update("INSERT INTO sys_user(username,password_hash,display_name) VALUES(?,?,?)",
-                    "admin", encoder.encode("123456"), "王路飞");
+    private boolean columnExists(String table, String column) throws Exception {
+        try (Connection conn = jdbc.getDataSource().getConnection();
+             ResultSet rs = conn.getMetaData().getColumns(conn.getCatalog(), null, table, column)) {
+            return rs.next();
         }
     }
 
-    private void seedClasses() {
-        if (count("SELECT COUNT(*) FROM class_info") == 0) {
-            jdbc.update("INSERT INTO class_info(name,type,term) VALUES(?,?,?)", "初一(1)班", "HOMEROOM", "2026秋季");
-            jdbc.update("INSERT INTO class_info(name,type,term) VALUES(?,?,?)", "初一(2)班", "SUBJECT", "2026秋季");
-        }
-    }
-
-    private void seedSettings() {
-        String[][] kv = {
-                {"teacher_name", "王路飞"},
-                {"term", "2026秋季"},
-                {"school_motto", "教练，我想打篮球"},
-                {"personal_motto", "我一直都想证明：努力是能够超越天才的！"},
-                {"pass_line", "60"},
-                {"excellent_line", "85"},
-                {"homeroom_class_id", "1"},
-        };
-        for (String[] p : kv) {
-            Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM setting WHERE k=?", Integer.class, p[0]);
-            if (n == 0) {
-                jdbc.update("INSERT INTO setting(k,v) VALUES(?,?)", p[0], p[1]);
+    private boolean indexExists(String table, String index) throws Exception {
+        try (Connection conn = jdbc.getDataSource().getConnection();
+             ResultSet rs = conn.getMetaData().getIndexInfo(conn.getCatalog(), null, table, false, false)) {
+            while (rs.next()) {
+                if (index.equalsIgnoreCase(rs.getString("INDEX_NAME"))) return true;
             }
         }
+        return false;
     }
 
-    private void seedSubjects() {
-        if (count("SELECT COUNT(*) FROM subject") == 0) {
-            Object[][] rows = {
-                    {"语文", "孙老师", "#f78fb3"},
-                    {"数学", "赵老师", "#6fa8f5"},
-                    {"英语", "钱老师", "#7ed6a5"},
-                    {"科学", "我", "#f0c96e"},
-                    {"社会", "李老师", "#b39ddb"},
-                    {"美术", "王老师", "#f0939a"},
-                    {"体育", "吴老师", "#8fd3d8"},
-                    {"音乐", "郑老师", "#c5e384"},
-                    {"班会", "我", "#f5b971"},
-                    {"自习", "我", "#9fc5f8"},
-                    {"信息技术", "王老师", "#82b1e0"},
-            };
-            for (Object[] r : rows) {
-                jdbc.update("INSERT INTO subject(name,teacher,color) VALUES(?,?,?)", r[0], r[1], r[2]);
+    /** 删除旧唯一索引（若存在）并建立 (user_id, ...) 联合唯一索引（若不存在） */
+    private void rebuildUniqueIndex(String table, String oldIndex, String newIndex, String cols) {
+        try {
+            if (indexExists(table, oldIndex)) {
+                jdbc.execute("ALTER TABLE " + table + " DROP INDEX " + oldIndex);
             }
+            if (!indexExists(table, newIndex)) {
+                jdbc.execute("ALTER TABLE " + table + " ADD UNIQUE KEY " + newIndex + " (" + cols + ")");
+            }
+        } catch (Exception e) {
+            System.out.println("[migrate] 索引跳过 " + table + "：" + e.getMessage());
         }
     }
 
-    private void seedPeriods() {
+    /** setting 表主键由 k 改为 (user_id, k) */
+    private void rebuildSettingPrimaryKey() {
+        try {
+            List<String> pk = new ArrayList<>();
+            try (Connection conn = jdbc.getDataSource().getConnection();
+                 ResultSet rs = conn.getMetaData().getPrimaryKeys(conn.getCatalog(), null, "setting")) {
+                while (rs.next()) pk.add(rs.getString("COLUMN_NAME"));
+            }
+            if (!pk.contains("user_id")) {
+                jdbc.execute("ALTER TABLE setting DROP PRIMARY KEY");
+                jdbc.execute("ALTER TABLE setting ADD PRIMARY KEY (user_id, k)");
+            }
+        } catch (Exception e) {
+            System.out.println("[migrate] setting 主键跳过：" + e.getMessage());
+        }
+    }
+
+    // ---------- 全局模板（所有账号共享，不带 user_id） ----------
+    private void seedGlobalPeriods() {
         if (count("SELECT COUNT(*) FROM period") == 0) {
             Object[][] rows = {
                     {"早自习", "07:40", "08:00", 1, 0},
@@ -133,7 +148,7 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    private void seedRules() {
+    private void seedGlobalRules() {
         if (count("SELECT COUNT(*) FROM quick_note_rule") == 0) {
             Object[][] rows = {
                     {"ATTENDANCE", "迟到,早退,请假,缺勤,旷课,考勤,早读"},
@@ -148,40 +163,60 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    private void seedHolidays() {
-        if (count("SELECT COUNT(*) FROM holiday") == 0) {
-            Object[][] rows = {
-                    {"中秋节", "2026-09-25"},
-                    {"国庆节", "2026-10-01"},
-                    {"圣诞节", "2026-12-25"},
-                    {"元旦", "2027-01-01"},
-            };
-            for (Object[] r : rows) {
-                jdbc.update("INSERT INTO holiday(name,holiday_date) VALUES(?,?)", r[0], r[1]);
-            }
+    /**
+     * 内置成就定义（user_id=0 全局共享，所有账号 UNION 可见）。
+     * 10 条自动规则 + 1 条大满贯；按 name 幂等补齐，老师可改阈值/停用但不可删。
+     */
+    private void seedBuiltinAchievements() {
+        if (count("SELECT COUNT(*) FROM achievement_def WHERE user_id=0") > 0) return;
+        // 每行：名称, 描述, 图标, 等级, 规则类型, 规则参数JSON
+        Object[][] defs = {
+                {"全勤之星", "本学期无迟到、无缺勤、无请假记录，全勤到校", "check", "SILVER",
+                        "PERFECT_ATTENDANCE", "{\"allowLeave\":false}"},
+                {"作业全勤", "本学期作业全部按时上交，没有未交记录", "books", "SILVER",
+                        "PERFECT_HOMEWORK", "{}"},
+                {"纪律标兵", "本学期没有课堂违纪记录，自律守纪", "shield", "SILVER",
+                        "PERFECT_DISCIPLINE", "{}"},
+                {"进步之星", "最近两次考试班级排名提升 5 名及以上", "rocket", "SILVER",
+                        "RANK_UP", "{\"minRankUp\":5}"},
+                {"全科优秀", "最近一次考试所有科目成绩均达到优秀线", "glowing-star", "GOLD",
+                        "ALL_EXCELLENT", "{}"},
+                {"单科状元", "任一科目取得班级最高分（并列均可获得）", "crown", "BRONZE",
+                        "SUBJECT_TOP", "{}"},
+                {"满分达人", "任一科目取得满分（满分线默认 100 分）", "hundred", "BRONZE",
+                        "SCORE_FULL", "{\"fullScore\":100}"},
+                {"劳动能手", "本学期参与值日劳动 10 次及以上", "broom", "BRONZE",
+                        "DUTY_COUNT", "{\"minDuty\":10}"},
+                {"班委担当", "担任班委职务，认真为班级服务", "medal-1st", "BRONZE",
+                        "COMMITTEE", "{}"},
+                {"连续全勤", "连续 4 周没有迟到、缺勤记录", "sun", "BRONZE",
+                        "CONTINUOUS_ATTENDANCE", "{\"weeks\":4}"},
+                {"大满贯", "集齐本学期全部启用的自动成就", "trophy", "PLATINUM",
+                        "COLLECTOR", "{}"},
+        };
+        for (Object[] d : defs) {
+            jdbc.update("INSERT INTO achievement_def(user_id,name,description,icon,tier,kind,rule_type,rule_params,enabled,builtin) " +
+                            "VALUES(0,?,?,?,?,'AUTO',?,?,1,1)",
+                    d[0], d[1], d[2], d[3], d[4], d[5]);
         }
     }
 
-    private void seedCards() {
-        if (count("SELECT COUNT(*) FROM card_config") == 0) {
-            String[] keys = {"attendance", "timetable", "holiday", "todayCourse", "discipline", "homework"};
-            for (int i = 0; i < keys.length; i++) {
-                jdbc.update("INSERT INTO card_config(card_key,sort_order,visible) VALUES(?,?,1)", keys[i], i);
-            }
+    // ---------- 默认 admin 账号 ----------
+    private void seedAdmin() {
+        if (count("SELECT COUNT(*) FROM sys_user") == 0) {
+            jdbc.update("INSERT INTO sys_user(username,password_hash,display_name) VALUES(?,?,?)",
+                    "admin", encoder.encode("123456"), "王路飞");
+        }
+        // admin 账号（id=1）的默认数据；已有数据则仅补齐缺失设置
+        Long adminId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username='admin' ORDER BY id LIMIT 1",
+                Long.class);
+        if (adminId != null) {
+            String name = jdbc.queryForObject("SELECT display_name FROM sys_user WHERE id=?", String.class, adminId);
+            seeder.seedIfEmpty(adminId, name);
         }
     }
 
-    private void seedDutyDefaults() {
-        if (count("SELECT COUNT(*) FROM duty_config") == 0) {
-            for (int d = 1; d <= 5; d++) {
-                jdbc.update("INSERT INTO duty_config(day_of_week,person_count) VALUES(?,4)", d);
-            }
-        }
-        if (count("SELECT COUNT(*) FROM duty_task") == 0) {
-            String[] tasks = {"扫地", "擦黑板", "倒垃圾", "擦窗户", "整理讲台"};
-            for (String t : tasks) {
-                jdbc.update("INSERT INTO duty_task(name) VALUES(?)", t);
-            }
-        }
+    private Integer count(String sql) {
+        return jdbc.queryForObject(sql, Integer.class);
     }
 }
