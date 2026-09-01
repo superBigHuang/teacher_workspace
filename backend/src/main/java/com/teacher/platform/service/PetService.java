@@ -24,6 +24,13 @@ public class PetService {
     /** 满级累计成长值 */
     public static final int MAX_EXP = 280;
 
+    /** 一次成长值变动的结果：affected=实际变动的宠物数；levelUp=本次触发的升级事件（无则 null） */
+    public record AwardResult(int affected, LevelUp levelUp) {}
+
+    /** 升级事件（前端全屏进化演出用；skinKey/fxTheme 决定演出主题与形态图） */
+    public record LevelUp(Long studentId, String name, String petName, int fromLevel, int toLevel,
+                          String skinKey, String fxTheme) {}
+
     /** 等级由累计 exp 推导：[0,40)=Lv1 [40,100)=Lv2 [100,180)=Lv3 [180,280)=Lv4 [280+]=Lv5 */
     public static int levelOf(int exp) {
         if (exp >= 280) return 5;
@@ -44,13 +51,21 @@ public class PetService {
         };
     }
 
-    /** 领养宠物（一个学生一只，重复领养返回 false） */
+    /** 领养宠物（一个学生一只，重复领养返回 false）；petKey 为皮肤 skin_key，自定义皮肤须归属本账号 */
     public boolean adopt(Long uid, Long studentId, String petKey, String petName) {
         Integer exists = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pet WHERE user_id=? AND student_id=?", Integer.class, uid, studentId);
         if (exists != null && exists > 0) return false;
+        String key = petKey == null || petKey.isBlank() ? "dragon" : petKey;
+        if (!"dragon".equals(key)) {
+            // 自定义皮肤：内置行 user_id 为 NULL，自定义行须属于当前账号；校验不过回退内置云龙
+            Integer ok = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM pet_skin WHERE skin_key=? AND (user_id IS NULL OR user_id=?)",
+                    Integer.class, key, uid);
+            if (ok == null || ok == 0) key = "dragon";
+        }
         jdbc.update("INSERT INTO pet(user_id,student_id,pet_key,pet_name,level,exp,adopted_at) VALUES(?,?,?, ?,1,0,?)",
-                uid, studentId, petKey == null || petKey.isBlank() ? "dragon" : petKey,
+                uid, studentId, key,
                 petName == null || petName.isBlank() ? "云小龙" : petName, LocalDateTime.now());
         return true;
     }
@@ -63,42 +78,70 @@ public class PetService {
      * @param source MANUAL / AUTO_ATTENDANCE / AUTO_HOMEWORK / AUTO_DISCIPLINE / AUTO_SCORE
      * @param bizRef 业务幂等键（如 "attendance:123"、"exam:5:学生id"）；非空时同 source+bizRef 已存在则跳过
      * @param remark 流水备注/事项名
-     * @return 实际变动的宠物数（0=未领养或幂等跳过）
+     * @return 变动结果（affected=实际变动宠物数，0=未领养或幂等跳过；levelUp=本次升级事件，无则 null）。
+     *         同步路径（MANUAL/AUTO_SCORE，老师在线操作）升级信息随响应返回立即演出；
+     *         其余自动联动路径（考勤/作业/纪律，发生在别的页面）置 evolve_pending=1，下次入座次表页补播。
      */
-    public int award(Long uid, Long studentId, Long ruleId, Integer score, String source, String bizRef, String remark) {
+    public AwardResult award(Long uid, Long studentId, Long ruleId, Integer score, String source, String bizRef, String remark) {
         if (bizRef != null) {
             Integer dup = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM pet_log WHERE user_id=? AND source=? AND biz_ref=?",
                     Integer.class, uid, source, bizRef);
-            if (dup != null && dup > 0) return 0;
+            if (dup != null && dup > 0) return new AwardResult(0, null);
         }
         List<Map<String, Object>> pets = jdbc.queryForList(
                 "SELECT id,exp FROM pet WHERE user_id=? AND student_id=?", uid, studentId);
-        if (pets.isEmpty()) return 0;   // 未领养：不写流水、不补历史分
+        if (pets.isEmpty()) return new AwardResult(0, null);   // 未领养：不写流水、不补历史分
 
         int delta;
         String logRemark = remark;
         if (ruleId != null) {
             List<Map<String, Object>> rules = jdbc.queryForList(
                     "SELECT score,name,enabled FROM pet_rule WHERE id=? AND user_id=?", ruleId, uid);
-            if (rules.isEmpty()) return 0;
+            if (rules.isEmpty()) return new AwardResult(0, null);
             Map<String, Object> rule = rules.get(0);
-            if (((Number) rule.get("enabled")).intValue() == 0) return 0;
+            if (((Number) rule.get("enabled")).intValue() == 0) return new AwardResult(0, null);
             delta = ((Number) rule.get("score")).intValue();
             if (logRemark == null || logRemark.isBlank()) logRemark = String.valueOf(rule.get("name"));
         } else {
             delta = score == null ? 0 : score;
         }
-        if (delta == 0) return 0;
+        if (delta == 0) return new AwardResult(0, null);
 
+        String src = source == null ? "MANUAL" : source;
         jdbc.update("INSERT INTO pet_log(user_id,student_id,rule_id,score,source,biz_ref,remark) VALUES(?,?,?,?,?,?,?)",
-                uid, studentId, ruleId, delta, source == null ? "MANUAL" : source, bizRef, logRemark);
+                uid, studentId, ruleId, delta, src, bizRef, logRemark);
         Long petId = ((Number) pets.get(0).get("id")).longValue();
         int oldExp = ((Number) pets.get(0).get("exp")).intValue();
         // 扣分下限 0、加分满级封顶 280；等级按新 exp 重算（扣分不降级由 clamp 下限保证）
         int newExp = Math.max(0, Math.min(MAX_EXP, oldExp + delta));
-        jdbc.update("UPDATE pet SET exp=?, level=? WHERE id=?", newExp, levelOf(newExp), petId);
-        return 1;
+        int oldLevel = levelOf(oldExp);
+        int newLevel = levelOf(newExp);
+        jdbc.update("UPDATE pet SET exp=?, level=? WHERE id=?", newExp, newLevel, petId);
+        if (newLevel > oldLevel) {
+            LevelUp lu = loadLevelUp(uid, studentId, oldLevel, newLevel);
+            boolean sync = "MANUAL".equals(src) || "AUTO_SCORE".equals(src);
+            if (!sync) {
+                // 跨页面升级：置待演标记，座次表页加载时补播（演完调 evolve-seen 清除）
+                jdbc.update("UPDATE pet SET evolve_pending=1 WHERE id=?", petId);
+            }
+            return new AwardResult(1, lu);
+        }
+        return new AwardResult(1, null);
+    }
+
+    /** 组装升级演出信息（学生名/宠物名/皮肤/特效主题） */
+    private LevelUp loadLevelUp(Long uid, Long studentId, int fromLevel, int toLevel) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT s.name sname, p.pet_name pname, p.pet_key skinKey, COALESCE(sk.fx_theme,'gold') fxTheme " +
+                        "FROM pet p JOIN student s ON s.id=p.student_id " +
+                        "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
+                        "WHERE p.user_id=? AND p.student_id=?", uid, studentId);
+        if (rows.isEmpty()) return null;
+        Map<String, Object> r = rows.get(0);
+        String petName = r.get("pname") == null ? "云小龙" : String.valueOf(r.get("pname"));
+        return new LevelUp(studentId, String.valueOf(r.get("sname")), petName,
+                fromLevel, toLevel, String.valueOf(r.get("skinKey")), String.valueOf(r.get("fxTheme")));
     }
 
     /** 撤回一条流水：删除该 log 并回退对应 exp（同样遵守下限 0/封顶 280） */
@@ -174,15 +217,16 @@ public class PetService {
         if (((Number) pet.get("level")).intValue() < 5) return false;
         jdbc.update("INSERT INTO pet_badge(user_id,student_id,pet_key,pet_name) VALUES(?,?,?,?)",
                 uid, studentId, pet.get("pet_key"), pet.get("pet_name"));
-        jdbc.update("UPDATE pet SET level=1, exp=0, graduated_count=graduated_count+1 WHERE id=?",
+        // 毕业有独立仪式弹窗，不走进化演出：清待演标记
+        jdbc.update("UPDATE pet SET level=1, exp=0, graduated_count=graduated_count+1, evolve_pending=0 WHERE id=?",
                 ((Number) pet.get("id")).longValue());
         return true;
     }
 
     /**
-     * 全班负面状态标记（纯视觉，次日自动翻篇）：
-     * dizzy=当日有扣分流水；frozen=当日有扣分且 exp 已被扣到 0；
-     * broken=近 7 天扣分绝对值累计 ≥100。
+     * 全班当日状态标记（纯视觉，次日自动翻篇）：
+     * dizzy=当日有扣分流水（前端表现为小乌云下雨）；frozen=当日有扣分且 exp 已被扣到 0；
+     * broken=近 7 天扣分绝对值累计 ≥100；starToday=当日正分流水合计 ≥5（今日之星，正向状态）。
      * 返回 studentId -> 状态集合。
      */
     public Map<Long, Set<String>> statusFlags(Long uid) {
@@ -194,6 +238,16 @@ public class PetService {
                 uid, today).forEach(r -> {
             Long sid = ((Number) r.get("sid")).longValue();
             flags.computeIfAbsent(sid, k -> new HashSet<>()).add("dizzy");
+        });
+        // 今日之星：当日加分合计 ≥5
+        jdbc.queryForList(
+                "SELECT student_id sid, SUM(score) t FROM pet_log " +
+                        "WHERE user_id=? AND score>0 AND DATE(created_at)=? GROUP BY student_id",
+                uid, today).forEach(r -> {
+            if (((Number) r.get("t")).intValue() >= 5) {
+                Long sid = ((Number) r.get("sid")).longValue();
+                flags.computeIfAbsent(sid, k -> new HashSet<>()).add("starToday");
+            }
         });
         // 近 7 天扣分累计（绝对值）
         Map<Long, Integer> weekDeduct = new HashMap<>();

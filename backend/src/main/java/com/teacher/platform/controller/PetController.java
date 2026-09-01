@@ -3,10 +3,14 @@ package com.teacher.platform.controller;
 import com.teacher.platform.common.Result;
 import com.teacher.platform.service.PetService;
 import com.teacher.platform.service.TermStatsService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.File;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
@@ -17,9 +21,18 @@ import java.util.*;
 @RequestMapping("/api/pet")
 public class PetController extends BaseController {
 
+    /** 进化演出合法特效主题 */
+    private static final Set<String> FX_THEMES = Set.of("gold", "fire", "ice", "thunder", "forest", "candy");
+    /** 皮肤图片上传阶段（蛋 + Lv1~5） */
+    private static final Set<String> SKIN_STAGES = Set.of("egg", "1", "2", "3", "4", "5");
+
     private final JdbcTemplate jdbc;
     private final PetService petService;
     private final TermStatsService termStats;
+
+    /** 本地上传目录（自定义皮肤图片落地处，经 /uploads/** 静态映射访问） */
+    @Value("${app.upload-dir:./uploads}")
+    private String uploadDir;
 
     public PetController(JdbcTemplate jdbc, PetService petService, TermStatsService termStats) {
         this.jdbc = jdbc;
@@ -33,14 +46,19 @@ public class PetController extends BaseController {
 
     // ---------- 宠物 ----------
 
-    /** 全班宠物状态：学生 + 宠物（未领养为 null）+ 等级/成长值/毕业数 + 当日负面状态标记 */
+    /**
+     * 全班宠物状态：{pets: 学生+宠物（未领养为 null，含等级/成长值/皮肤/当日状态标记）,
+     * pendingEvolves: 跨页面升级待演列表}。
+     */
     @GetMapping("/pets")
-    public Result<List<Map<String, Object>>> pets() {
+    public Result<Map<String, Object>> pets() {
         Long uid = uid();
         List<Map<String, Object>> list = jdbc.queryForList(
                 "SELECT s.id studentId, s.name, s.gender, s.stu_no stuNo, " +
-                        "p.id petId, p.pet_key petKey, p.pet_name petName, p.level, p.exp, p.graduated_count graduatedCount " +
+                        "p.id petId, p.pet_key skinKey, p.pet_name petName, p.level, p.exp, p.graduated_count graduatedCount, " +
+                        "COALESCE(sk.fx_theme,'gold') fxTheme " +
                         "FROM student s LEFT JOIN pet p ON p.student_id=s.id AND p.user_id=s.user_id " +
+                        "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
                         "WHERE s.user_id=? AND s.class_id=? ORDER BY s.stu_no, s.id", uid, classId());
         Map<Long, Set<String>> flags = petService.statusFlags(uid);
         for (Map<String, Object> row : list) {
@@ -54,8 +72,24 @@ public class PetController extends BaseController {
             row.put("dizzy", f.contains("dizzy"));
             row.put("frozen", f.contains("frozen"));
             row.put("broken", f.contains("broken"));
+            row.put("starToday", f.contains("starToday"));
         }
-        return Result.ok(list);
+        // 跨页面/自动联动导致的待演升级（座次表加载后逐个播放，演完调 evolve-seen 清除）
+        List<Map<String, Object>> pending = jdbc.queryForList(
+                "SELECT p.student_id studentId, s.name, p.pet_name petName, p.level toLevel, " +
+                        "p.pet_key skinKey, COALESCE(sk.fx_theme,'gold') fxTheme " +
+                        "FROM pet p JOIN student s ON s.id=p.student_id AND s.user_id=p.user_id " +
+                        "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
+                        "WHERE p.user_id=? AND p.evolve_pending=1 AND s.class_id=?", uid, classId());
+        return Result.ok(Map.of("pets", list, "pendingEvolves", pending));
+    }
+
+    /** 清除某只宠物的待演标记（进化演出播放完一幕后调用） */
+    @PostMapping("/evolve-seen")
+    public Result<Void> evolveSeen(@RequestBody Map<String, Object> body) {
+        jdbc.update("UPDATE pet SET evolve_pending=0 WHERE user_id=? AND student_id=?",
+                uid(), asLong(body.get("studentId")));
+        return Result.ok();
     }
 
     /** 重置/移除宠物（删除宠物及其流水/徽章/兑换记录；误领养或转学生清理用） */
@@ -77,24 +111,33 @@ public class PetController extends BaseController {
         return ok ? Result.ok() : Result.fail("该学生已领养过宠物");
     }
 
-    /** 单人评价 */
+    /** 单人评价；响应 levelUps 为本次触发的升级（前端立即播放进化演出） */
     @PostMapping("/evaluate")
     public Result<Map<String, Object>> evaluate(@RequestBody Map<String, Object> body) {
         Long sid = asLong(body.get("studentId"));
         Long ruleId = asLong(body.get("ruleId"));
-        int n = petService.award(uid(), sid, ruleId, null, "MANUAL", null, null);
-        return Result.ok(Map.of("affected", n));
+        PetService.AwardResult r = petService.award(uid(), sid, ruleId, null, "MANUAL", null, null);
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("affected", r.affected());
+        res.put("levelUps", r.levelUp() == null ? List.of() : List.of(r.levelUp()));
+        return Result.ok(res);
     }
 
-    /** 批量评价（多学生同一评价项） */
+    /** 批量评价（多学生同一评价项）；多人连升时 levelUps 逐个排队播放 */
     @PostMapping("/evaluate-batch")
     public Result<Map<String, Object>> evaluateBatch(@RequestBody Map<String, Object> body) {
         Long ruleId = asLong(body.get("ruleId"));
         int n = 0;
+        List<PetService.LevelUp> levelUps = new ArrayList<>();
         for (Object o : (Iterable<?>) body.getOrDefault("studentIds", List.of())) {
-            n += petService.award(uid(), asLong(o), ruleId, null, "MANUAL", null, null);
+            PetService.AwardResult r = petService.award(uid(), asLong(o), ruleId, null, "MANUAL", null, null);
+            n += r.affected();
+            if (r.levelUp() != null) levelUps.add(r.levelUp());
         }
-        return Result.ok(Map.of("affected", n));
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("affected", n);
+        res.put("levelUps", levelUps);
+        return Result.ok(res);
     }
 
     /** 撤回一条流水（回退成长值，不删业务记录） */
@@ -319,21 +362,133 @@ public class PetController extends BaseController {
         return Result.ok(result);
     }
 
-    /** 发放成绩奖：source=AUTO_SCORE，biz_ref=exam:{examId}:{studentId} 幂等 */
+    /** 发放成绩奖：source=AUTO_SCORE，biz_ref=exam:{examId}:{studentId} 幂等；升级随 levelUps 返回演出 */
     @PostMapping("/score-awards/grant")
     public Result<Map<String, Object>> grantScoreAwards(@RequestBody Map<String, Object> body) {
         Long uid = uid();
         Long examId = asLong(body.get("examId"));
         int n = 0;
+        List<PetService.LevelUp> levelUps = new ArrayList<>();
         for (Object o : (Iterable<?>) body.getOrDefault("items", List.of())) {
             if (o instanceof Map<?, ?> it) {
                 Long sid = asLong(it.get("studentId"));
                 int score = asInt(it.get("score"));
-                n += petService.award(uid, sid, null, score, "AUTO_SCORE",
+                PetService.AwardResult r = petService.award(uid, sid, null, score, "AUTO_SCORE",
                         "exam:" + examId + ":" + sid, str(it.get("reason")));
+                n += r.affected();
+                if (r.levelUp() != null) levelUps.add(r.levelUp());
             }
         }
-        return Result.ok(Map.of("affected", n));
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("affected", n);
+        res.put("levelUps", levelUps);
+        return Result.ok(res);
+    }
+
+    // ---------- 自定义皮肤 ----------
+
+    /** 皮肤列表：内置全局皮肤 + 本账号自定义皮肤；imgs 为 {egg,1,2,3,4,5} 形态图 URL */
+    @GetMapping("/skins")
+    public Result<List<Map<String, Object>>> skins() {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id, skin_key skinKey, name, built_in builtIn, fx_theme fxTheme, " +
+                        "img_egg egg, img_1 i1, img_2 i2, img_3 i3, img_4 i4, img_5 i5 " +
+                        "FROM pet_skin WHERE user_id IS NULL OR user_id=? ORDER BY built_in DESC, id", uid());
+        for (Map<String, Object> r : rows) {
+            Map<String, String> imgs = new LinkedHashMap<>();
+            for (String st : List.of("egg", "1", "2", "3", "4", "5")) {
+                String key = "egg".equals(st) ? "egg" : "i" + st;
+                Object v = r.remove(key);
+                imgs.put(st, v == null ? null : String.valueOf(v));
+            }
+            r.put("imgs", imgs);
+        }
+        return Result.ok(rows);
+    }
+
+    /** 创建自定义皮肤（先建行拿 skinKey，图片随后逐张上传）；返回 {id, skinKey} */
+    @PostMapping("/skin")
+    public Result<Map<String, Object>> createSkin(@RequestBody Map<String, Object> body) {
+        Long uid = uid();
+        String name = str(body.get("name"));
+        if (name.isBlank()) return Result.fail("请填写宠物名称");
+        String theme = str(body.get("fxTheme"));
+        if (!FX_THEMES.contains(theme)) theme = "gold";
+        jdbc.update("INSERT INTO pet_skin(user_id,skin_key,name,built_in,fx_theme,created_at) VALUES(?,?,?,0,?,?)",
+                uid, "u0", name, theme, LocalDateTime.now());
+        Long id = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+        String skinKey = "u" + id;
+        jdbc.update("UPDATE pet_skin SET skin_key=? WHERE id=?", skinKey, id);
+        return Result.ok(Map.of("id", id, "skinKey", skinKey));
+    }
+
+    /**
+     * 上传皮肤某阶段图片（multipart：skinKey + stage=egg/1..5 + file）。
+     * 校验：皮肤归属本账号、png/jpg/webp、≤5MB；落地 {upload-dir}/pets/{uid}/{skinKey}_{stage}.{ext}，
+     * 更新对应 img_* 列，返回访问 URL。
+     */
+    @PostMapping("/skin/upload")
+    public Result<Map<String, Object>> uploadSkin(@RequestParam String skinKey, @RequestParam String stage,
+                                                  @RequestParam("file") MultipartFile file) {
+        Long uid = uid();
+        List<Map<String, Object>> sk = jdbc.queryForList(
+                "SELECT id FROM pet_skin WHERE skin_key=? AND user_id=? AND built_in=0", skinKey, uid);
+        if (sk.isEmpty()) return Result.fail("皮肤不存在或不可修改");
+        if (!SKIN_STAGES.contains(stage)) return Result.fail("阶段参数错误");
+        String orig = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
+        String ext;
+        if (orig.endsWith(".png")) ext = "png";
+        else if (orig.endsWith(".jpg") || orig.endsWith(".jpeg")) ext = "jpg";
+        else if (orig.endsWith(".webp")) ext = "webp";
+        else return Result.fail("仅支持 png/jpg/webp 图片");
+        if (file.isEmpty()) return Result.fail("图片内容为空");
+        if (file.getSize() > 5L * 1024 * 1024) return Result.fail("图片不能超过 5MB");
+        try {
+            // 必须用绝对路径：transferTo 相对路径会解析到 Tomcat 临时目录，与 mkdirs 的 JVM 工作目录不一致
+            File dir = new File(uploadDir, "pets" + File.separator + uid).getAbsoluteFile();
+            if (!dir.exists() && !dir.mkdirs()) return Result.fail("上传目录创建失败");
+            String fname = skinKey + "_" + stage + "." + ext;
+            file.transferTo(new File(dir, fname));
+            String url = "/uploads/pets/" + uid + "/" + fname;
+            // 列名白名单拼接（stage 已校验）
+            jdbc.update("UPDATE pet_skin SET img_" + stage + "=? WHERE id=?", url, sk.get(0).get("id"));
+            return Result.ok(Map.of("url", url));
+        } catch (Exception e) {
+            return Result.fail("上传失败：" + e.getMessage());
+        }
+    }
+
+    /** 修改自定义皮肤名称/特效主题（内置皮肤不可改） */
+    @PutMapping("/skin/{id}")
+    public Result<Void> updateSkin(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Long uid = uid();
+        String theme = str(body.get("fxTheme"));
+        if (!FX_THEMES.contains(theme)) theme = "gold";
+        String name = str(body.get("name"));
+        int n;
+        if (name.isBlank()) {
+            n = jdbc.update("UPDATE pet_skin SET fx_theme=? WHERE id=? AND user_id=? AND built_in=0",
+                    theme, id, uid);
+        } else {
+            n = jdbc.update("UPDATE pet_skin SET name=?, fx_theme=? WHERE id=? AND user_id=? AND built_in=0",
+                    name, theme, id, uid);
+        }
+        return n == 0 ? Result.fail("皮肤不存在或不可修改") : Result.ok();
+    }
+
+    /** 删除自定义皮肤（被宠物引用时禁删；内置皮肤不可删） */
+    @DeleteMapping("/skin/{id}")
+    public Result<Void> deleteSkin(@PathVariable Long id) {
+        Long uid = uid();
+        List<Map<String, Object>> sk = jdbc.queryForList(
+                "SELECT skin_key FROM pet_skin WHERE id=? AND user_id=? AND built_in=0", id, uid);
+        if (sk.isEmpty()) return Result.fail("皮肤不存在或不可删除");
+        String key = str(sk.get(0).get("skinKey"));
+        Integer used = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pet WHERE user_id=? AND pet_key=?", Integer.class, uid, key);
+        if (used != null && used > 0) return Result.fail("已有 " + used + " 只宠物使用该皮肤，不能删除");
+        jdbc.update("DELETE FROM pet_skin WHERE id=?", id);
+        return Result.ok();
     }
 
     // ---------- 辅助 ----------

@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test'
 import * as XLSX from 'xlsx'
+import fs from 'fs'
+import path from 'path'
 
 // 全站 E2E：登录一次，按模块逐步走查，每步带断言。
 // 依赖后端 8088 + 前端 5173 已启动；当前库为真实花名册（40 人，男20女20）。
@@ -19,6 +21,7 @@ let nuToken = ''         // E2E 注册新账号的 token（数据隔离验证用
 let students = []        // 真实学生名单（来自 API）
 let firstStudent = ''    // 第一个真实学生姓名，用于搜索
 let testStudentId = null // 临时测试学生 id
+let testStudentId2 = null // 临时测试学生2（自创皮肤领养验证用）
 
 const nav = (page, name) => page.locator('.nav-item', { hasText: name }).first()
 const authHeader = () => ({ Authorization: 'Bearer ' + token })
@@ -119,6 +122,19 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     } catch (e) { /* 忽略 */ }
     try {
       if (testStudentId) await request.delete(API + '/roster/student/' + testStudentId, { headers: authHeader() })
+    } catch (e) { /* 忽略 */ }
+    try {
+      // 自创皮肤验证用的临时学生（宠物随学生级联删除）
+      if (testStudentId2) await request.delete(API + '/roster/student/' + testStudentId2, { headers: authHeader() })
+    } catch (e) { /* 忽略 */ }
+    try {
+      // E2E 自创皮肤清理：须在学生删除之后（被宠物引用时后端禁删）
+      const sk = (await (await request.get(API + '/pet/skins', { headers: authHeader() })).json()).data || []
+      for (const s of sk) {
+        if (!s.builtIn && String(s.name || '').includes('E2E')) {
+          await request.delete(API + '/pet/skin/' + s.id, { headers: authHeader() })
+        }
+      }
     } catch (e) { /* 忽略 */ }
   })
 
@@ -718,10 +734,11 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const apiGet = (url) => j(request.get.bind(request), API + url)
       const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
       const apiPut = (url, data) => j(request.put.bind(request), API + url, data)
-      /** 取测试生最新宠物状态 */
+      /** 取测试生最新宠物状态（/pet/pets 返回 {pets, pendingEvolves}） */
       const petOf = async () => {
-        const pets = (await apiGet('/pet/pets')).data
-        return pets.find(p => p.studentId === testStudentId)
+        const data = (await apiGet('/pet/pets')).data
+        const list = data.pets || data
+        return list.find(p => p.studentId === testStudentId)
       }
 
       // ① 领养 → UI 座次表页座位上显示 Lv1 形态（dragon_1；若未排座则在下方宠物卡区）
@@ -847,6 +864,106 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.keyboard.press('Escape')
     })
 
+    // ============ 11h. 进化演出 + 日常特效 + 自创皮肤 ============
+    await test.step('宠物进化：UI评价触发全屏进化演出（揭晓文案/confetti/点击跳过/形态切换）；今日之星彩虹与扣分乌云；自创皮肤建传领养全链路；pendingEvolves通道', async () => {
+      const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
+      const apiGet = (url) => j(request.get.bind(request), API + url)
+      const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
+
+      // 评价项：+5「拾金不昧(贵重)」升级用；负分项触发乌云特效
+      const rules = (await apiGet('/pet/rules')).data
+      const rule5 = rules.find(x => x.score === 5)
+      const ruleMinus = rules.find(x => x.score < 0)
+      expect(rule5).toBeTruthy()
+      expect(ruleMinus).toBeTruthy()
+
+      // ① 全屏进化演出：UI 连点 8 次 +5（毕业重置后 exp 0→40），第 8 次升 Lv2 触发 6 秒分镜
+      await page.goto('/seat')
+      const myCard = page.locator('.seat, .pet-card', { hasText: 'E2E测试生' })
+      await expect.poll(async () => await myCard.count(), { timeout: 15000 }).toBe(1)
+      await myCard.click()  // 打开宠物详情弹窗
+      for (let i = 0; i < 8; i++) {
+        await page.getByRole('button', { name: /评价加分/ }).click()
+        // +5 规则在「行为」分类，评价弹窗默认开「学习」tab
+        await page.locator('.el-dialog .el-tabs__item', { hasText: rule5.category }).first().click()
+        await page.locator('.el-dialog .rule-card', { hasText: rule5.name }).first().click()
+        await expect(page.locator('.el-dialog', { hasText: '给宠物评价' })).toBeHidden()
+      }
+      // 演出断言：遮罩 → 揭晓文案（等至 phase5）→ confetti canvas → 点击跳过 → 形态变 Lv2
+      const overlay = page.locator('.evo-overlay')
+      await expect(overlay).toBeVisible({ timeout: 10000 })
+      await expect(overlay.locator('.evo-title')).toHaveText(/进\s*化\s*成\s*功/, { timeout: 10000 })
+      await expect(overlay.locator('.evo-sub')).toContainText('Lv.2')
+      await expect(page.locator('canvas').first()).toBeAttached()
+      await overlay.click({ position: { x: 40, y: 40 } })  // 点击任意处跳过
+      await expect(overlay).toBeHidden({ timeout: 5000 })
+      await expect(myCard.locator('img[src*="dragon_2.webp"]')).toBeVisible()
+
+      // ② 日常特效：当日正分 40≥5 → 今日之星彩虹；再扣一分 → 小乌云下雨
+      await expect(myCard.locator('.wx-star')).toBeVisible()
+      await page.getByRole('button', { name: /评价加分/ }).click()
+      await page.locator('.el-dialog .el-tabs__item', { hasText: ruleMinus.category }).first().click()
+      await page.locator('.el-dialog .rule-card', { hasText: ruleMinus.name }).first().click()
+      await expect(page.locator('.el-dialog', { hasText: '给宠物评价' })).toBeHidden()
+      await expect(myCard.locator('.wx-cloud')).toBeVisible({ timeout: 8000 })
+      await expect(myCard.locator('.wx-cloud .wx-drop')).toBeAttached()
+      await page.keyboard.press('Escape')
+
+      // ③ pendingEvolves 通道（跨页/自动联动补播的防御性设计）：字段为数组 + evolve-seen 200
+      const petsResp = (await apiGet('/pet/pets')).data
+      expect(Array.isArray(petsResp.pendingEvolves)).toBeTruthy()
+      const seen = await apiPost('/pet/evolve-seen', { studentId: testStudentId })
+      expect(seen.code).toBe(200)
+
+      // ④ 自创皮肤：建行 → 上传 6 阶段图（内置 webp 代传）→ 回读校验 → 临时生 UI 领养
+      const skResp = await apiPost('/pet/skin', { name: 'E2E冰麒麟', fxTheme: 'ice' })
+      expect(skResp.code).toBe(200)
+      const skinKey = skResp.data.skinKey
+      const petDir = path.resolve(__dirname, '../../frontend/public/pets')
+      for (const stage of ['egg', '1', '2', '3', '4', '5']) {
+        const file = stage === 'egg' ? 'dragon_egg.webp' : `dragon_${stage}.webp`
+        const up = await request.post(API + '/pet/skin/upload', {
+          headers: authHeader(),
+          multipart: {
+            skinKey, stage,
+            file: { name: file, mimeType: 'image/webp', buffer: fs.readFileSync(path.join(petDir, file)) }
+          }
+        })
+        const uj = await up.json()
+        expect(uj.code).toBe(200)
+        expect(uj.data.url).toContain('/uploads/')
+      }
+      const skins = (await apiGet('/pet/skins')).data
+      const mine = skins.find(s => s.skinKey === skinKey)
+      expect(mine.fxTheme).toBe('ice')
+      for (const k of ['egg', '1', '2', '3', '4', '5']) expect(mine.imgs[k]).toContain('/uploads/')
+
+      // 第二个临时学生（不污染 40 名真实学生；afterAll 级联清理）
+      const add2 = await apiPost('/roster/student', { stuNo: '998', name: 'E2E皮肤生', gender: '女' })
+      expect(add2.code).toBe(200)
+      testStudentId2 = add2.data
+
+      // UI 领养自创皮肤：蛋卡 → 领养弹窗选「E2E冰麒麟」→ 6 阶段预览全走 /uploads → 起名领养
+      await page.goto('/seat')
+      const card2 = page.locator('.seat, .pet-card', { hasText: 'E2E皮肤生' })
+      await expect.poll(async () => await card2.count(), { timeout: 15000 }).toBe(1)
+      await card2.click()
+      const adoptDlg = page.locator('.el-dialog', { hasText: '领养守护精灵' })
+      await expect(adoptDlg).toBeVisible()
+      const customCard = adoptDlg.locator('.skin-card', { hasText: 'E2E冰麒麟' })
+      await expect(customCard).toBeVisible()
+      await customCard.click()
+      await expect.poll(async () => await adoptDlg.locator('.skin-preview img[src*="/uploads/"]').count(),
+        { timeout: 5000 }).toBe(6)
+      await adoptDlg.locator('input').fill('E2E冰冰')
+      await adoptDlg.getByRole('button', { name: /破壳领养/ }).click()
+      await expect(adoptDlg).toBeHidden()
+      // 领养后卡片形态图为自创皮肤上传图（/uploads/ 静态映射）
+      await expect(card2.locator('img[src*="/uploads/"]')).toBeVisible({ timeout: 10000 })
+      const p2 = (await apiGet('/pet/pets')).data.pets.find(p => p.studentId === testStudentId2)
+      expect(p2.skinKey).toBe(skinKey)
+    })
+
     // ============ 11g. 头像与班级设置 ============
     await test.step('头像与班级：emoji 头像保存/弹窗选择/侧边栏显示；任课班新增后删除（自清理）', async () => {
       // 头像：API 保存 🦊 → profile 读回 → 侧边栏显示
@@ -895,8 +1012,14 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const mb = page.locator('.el-message-box', { hasText: '删除' })
       await expect(mb).toBeVisible()
       await mb.getByRole('button', { name: '确定删除' }).click()
-      // 删除后搜索结果为空，统计回到 40
+      // 删除后搜索结果为空
       await expect.poll(async () => await page.locator('.stu-grid .stu-card').count(), { timeout: 10000 }).toBe(0)
+      // 11h 自创皮肤验证用的 E2E皮肤生为辅助数据，API 删除（宠物级联）；reload 后统计回到真实 40 人
+      if (testStudentId2) {
+        await request.delete(API + '/roster/student/' + testStudentId2, { headers: authHeader() })
+        testStudentId2 = null
+        await page.reload()
+      }
       await expect.poll(async () =>
         (await page.locator('.stat-card .num').nth(0).textContent() || '').trim(), { timeout: 10000 }).toBe('40')
       testStudentId = null

@@ -46,7 +46,7 @@
       <div v-for="s in students" :key="s.id" class="stu-card" :class="s.gender === '女' ? 'girl' : 'boy'" @click="openProfile(s)">
         <span v-if="badgeMap[s.id]?.cnt" class="stu-badge">🏅{{ badgeMap[s.id].cnt }}</span>
         <span v-if="petMap[s.id]" class="stu-pet">
-          <img :src="`/pets/dragon_${petMap[s.id].level}.webp`" alt="宠物">Lv.{{ petMap[s.id].level }}
+          <img :src="petImgOf(petMap[s.id])" alt="宠物">Lv.{{ petMap[s.id].level }}
         </span>
         <div class="name">{{ s.name }}</div>
         <div class="no">{{ s.stu_no }}</div>
@@ -217,7 +217,7 @@
         <el-tab-pane label="🐾 宠物" name="pet" lazy>
           <div v-if="petInfo">
             <div class="pet-box">
-              <img class="pet-arc-img" :src="`/pets/dragon_${petInfo.level}.webp`" alt="宠物">
+              <img class="pet-arc-img" :src="petImgOf(petInfo)" alt="宠物">
               <div class="pet-arc-info">
                 <div class="pet-arc-name">{{ petInfo.petName }}
                   <span class="pet-lv">Lv.{{ petInfo.level }}</span>
@@ -250,6 +250,7 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Search, Plus, FolderOpened, Download, Delete } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import http from '../api/http'
+import { petImgOf, setSkinCache } from '../composables/usePets'
 import BadgeIcon from '../components/BadgeIcon.vue'
 import AchievementBoard from './AchievementBoard.vue'
 
@@ -278,10 +279,13 @@ const petLogs = ref([])
 const petInfo = computed(() => profile.value.info ? petMap.value[profile.value.info.id] : null)
 async function loadPetMap() {
   try {
-    const list = await http.get('/pet/pets')
+    // /pet/pets 返回 {pets, pendingEvolves}；同时拉皮肤以支持自创皮肤图片映射
+    const data = await http.get('/pet/pets')
+    const list = data.pets || data
     const m = {}
     list.forEach(p => { if (p.petId) m[p.studentId] = p })
     petMap.value = m
+    try { setSkinCache(await http.get('/pet/skins')) } catch (e) { /* 皮肤接口不可用时兜底内置云龙 */ }
   } catch (e) { /* 宠物模块不可用时不影响花名册 */ }
 }
 function fmtPetTime(t) { return String(t || '').replace('T', ' ').slice(5, 16) }

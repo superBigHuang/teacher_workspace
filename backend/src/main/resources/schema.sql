@@ -341,8 +341,28 @@ CREATE TABLE IF NOT EXISTS pet (
   exp INT NOT NULL DEFAULT 0 COMMENT '累计成长值（满级封顶 280）',
   adopted_at DATETIME COMMENT '领养时间',
   graduated_count INT NOT NULL DEFAULT 0 COMMENT '毕业次数（荣誉榜徽章数）',
+  evolve_pending TINYINT NOT NULL DEFAULT 0 COMMENT '跨页面/自动联动升级待演标记：1=下次入座次表页补播进化演出',
   UNIQUE KEY uk_pet_student (user_id, student_id),
   KEY idx_pet_user (user_id)
+);
+
+-- 宠物皮肤（内置皮肤 user_id=NULL 全局共享；自定义皮肤按账号隔离，图片走 /uploads 上传）
+CREATE TABLE IF NOT EXISTS pet_skin (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NULL COMMENT 'NULL=内置全局皮肤',
+  skin_key VARCHAR(32) NOT NULL COMMENT '进化链标识：内置 dragon；自定义 u+id',
+  name VARCHAR(32) NOT NULL COMMENT '皮肤/种族名',
+  built_in TINYINT NOT NULL DEFAULT 0,
+  fx_theme VARCHAR(16) NOT NULL DEFAULT 'gold' COMMENT '进化演出主题：gold/fire/ice/thunder/forest/candy',
+  img_egg VARCHAR(255) COMMENT '蛋形态图 URL',
+  img_1 VARCHAR(255),
+  img_2 VARCHAR(255),
+  img_3 VARCHAR(255),
+  img_4 VARCHAR(255),
+  img_5 VARCHAR(255) COMMENT 'Lv5 形态图 URL',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_skin_key (skin_key),
+  KEY idx_ps_user (user_id)
 );
 
 -- 宠物评价项（per-user；预置 ~35 项可改分/停用，可自定义增删）

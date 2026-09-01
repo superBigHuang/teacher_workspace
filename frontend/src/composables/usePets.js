@@ -6,14 +6,50 @@ import http from '../api/http'
 export const PET_CATS = ['学习', '行为', '健康', '其他']
 
 /**
+ * 进化演出 6 套特效主题（fx_theme）：
+ * beam=光柱/光环色，colors=confetti 色组，particles=蓄力时汇聚的 emoji。
+ */
+export const FX_THEMES = {
+  gold:    { name: '祥云金', beam: '#FFD98A', colors: ['#FFD700', '#FFB347', '#FFF6E5'], particles: ['✨', '⭐'] },
+  fire:    { name: '烈焰红', beam: '#FF8A5C', colors: ['#FF5A3C', '#FF9A3C', '#FFD23C'], particles: ['🔥', '💥'] },
+  ice:     { name: '冰晶蓝', beam: '#8ECFFF', colors: ['#7EC8FF', '#C9ECFF', '#FFFFFF'], particles: ['❄️', '💎'] },
+  thunder: { name: '雷霆紫', beam: '#B78CFF', colors: ['#A06BFF', '#FFE066', '#FFFFFF'], particles: ['⚡', '🌩'] },
+  forest:  { name: '翡翠绿', beam: '#7FE0A8', colors: ['#6FD08C', '#FFB3D9', '#FFFFFF'], particles: ['🍃', '🌸'] },
+  candy:   { name: '彩虹糖', beam: '#FF9EC4', colors: ['#FF9EC4', '#9EC8FF', '#BFF0C8', '#FFE08A', '#D9B8FF', '#FFC9A3'], particles: ['🌈', '🎉'] },
+}
+
+/** 模块级皮肤缓存（不使用 usePets 的页面如 Roster 经 setSkinCache 共享同一份映射） */
+let skinCache = []
+export function setSkinCache(list) { skinCache = list || [] }
+
+/** 皮肤某阶段图片 URL（stage: 'egg' 或 1~5）；缺图兜底内置云龙 */
+export function skinImg(skinKey, stage) {
+  const sk = skinCache.find(s => s.skinKey === (skinKey || 'dragon'))
+  const url = sk?.imgs?.[String(stage)]
+  if (url) return url
+  return stage === 'egg' ? '/pets/dragon_egg.webp' : `/pets/dragon_${stage}.webp`
+}
+
+/**
+ * 宠物行（/pet/pets 或 /pet/ranking 返回）→ 当前形态图。
+ * /pets 行未领养时 petId===null 显示蛋；ranking 行无 petId 字段，按 level 取图。
+ */
+export function petImgOf(p) {
+  if (p && p.petId === null) return skinImg(p.skinKey || 'dragon', 'egg')
+  return skinImg(p?.skinKey || p?.petKey || 'dragon', (p && p.level) || 1)
+}
+
+/**
  * 班级宠物园逻辑复用（座次表页使用）：
- * 管理全班宠物状态、评价项、各类弹窗开关与全部宠物操作（领养/评价/撤回/毕业/荣誉榜/商店/评价项 CRUD）。
+ * 管理全班宠物状态、评价项、皮肤、进化演出队列、各类弹窗开关与全部宠物操作
+ * （领养/评价/撤回/毕业/荣誉榜/商店/评价项 CRUD）。
  * 弹窗模板由调用方提供；调用方只需把返回的状态与函数绑定到模板。
- * 创建时即自动加载宠物列表与评价项。
+ * 创建时即自动加载宠物列表、评价项与皮肤。
  */
 export function usePets() {
   const pets = ref([])            // 全班宠物状态（含未领养，petId 为 null）
   const rules = ref([])           // 评价项
+  const skins = ref([])           // 皮肤（内置 + 本账号自创）
   const selected = ref(new Set()) // 批量模式选中的学生 id
   const batchMode = ref(false)
 
@@ -25,8 +61,10 @@ export function usePets() {
   const rankDlg = ref(false)
   const shopDlg = ref(false)
   const rulesDlg = ref(false)
+  const skinMakerDlg = ref(false) // 自创宠物弹窗
 
   const adoptName = ref('')
+  const adoptSkin = ref('dragon') // 领养弹窗选中的皮肤 skinKey
   const adoptTarget = ref(null)
   const detailStudent = ref(null)
   const detailLogs = ref([])
@@ -43,14 +81,14 @@ export function usePets() {
   const ruleCat = ref('学习')
   const ruleForm = ref({ icon: '', name: '', score: 1 })
 
-  // 飘字动画
+  // 飘字/迸溅动画：text=加减分文字，ems=迸溅 emoji（dx=水平偏移，delay=错峰毫秒）
   let floatSeq = 0
   const floats = ref([])
+  // 宠物图 Q 弹/缩一下：sid -> 'pop'（加分）| 'shrink'（扣分）
+  const popKind = ref(new Map())
 
-  /** 宠物图片：未领养显示蛋，已领养按等级显示形态 */
-  function petImg(p) {
-    return p.petId ? `/pets/dragon_${p.level}.webp` : '/pets/dragon_egg.webp'
-  }
+  /** 宠物图片：按皮肤映射，未领养显示蛋 */
+  function petImg(p) { return petImgOf(p) }
 
   /** 本级经验进度百分比 */
   function expPct(p) {
@@ -63,11 +101,35 @@ export function usePets() {
     return floats.value.filter(f => f.sid === sid)
   }
 
-  /** 评价后在卡片上飘 +x/-x */
-  function addFloat(sid, score) {
+  /**
+   * 评价/兑换后在卡片上飘反馈：
+   * 加分飘金色 +N + 2~3 个 ⭐✨ 迸溅 + 宠物 Q 弹；扣分飘灰红 -N + 💦 + 图缩一下；
+   * opts.coins=兑换成功，三枚 🪙 抛物线蹦出。
+   */
+  function addFloat(sid, score, opts = {}) {
     const id = ++floatSeq
-    floats.value.push({ id, sid, text: (score > 0 ? '+' : '') + score, good: score > 0 })
-    setTimeout(() => { floats.value = floats.value.filter(f => f.id !== id) }, 1200)
+    const good = score > 0
+    const ems = []
+    if (opts.coins) {
+      ems.push(
+        { emoji: '🪙', dx: -30, delay: 0, cls: 'coin' },
+        { emoji: '🪙', dx: 0, delay: 100, cls: 'coin' },
+        { emoji: '🪙', dx: 30, delay: 200, cls: 'coin' })
+    } else if (good) {
+      const n = 2 + Math.floor(Math.random() * 2)
+      for (let i = 0; i < n; i++) {
+        ems.push({ emoji: i % 2 ? '✨' : '⭐', dx: Math.round(Math.random() * 60 - 30), delay: i * 60 })
+      }
+    } else if (score < 0) {
+      ems.push({ emoji: '💦', dx: 22, delay: 0 })
+    }
+    floats.value.push({ id, sid, text: score ? (good ? '+' : '') + score : '', good, ems })
+    if (score !== 0) {
+      popKind.value.set(sid, good ? 'pop' : 'shrink')
+      const kind = good ? 'pop' : 'shrink'
+      setTimeout(() => { if (popKind.value.get(sid) === kind) popKind.value.delete(sid) }, good ? 430 : 330)
+    }
+    setTimeout(() => { floats.value = floats.value.filter(f => f.id !== id) }, 1500)
   }
 
   function fmtTime(t) {
@@ -79,14 +141,76 @@ export function usePets() {
   }
 
   // ---------- 数据加载 ----------
+  /**
+   * 加载全班宠物；返回体为 {pets, pendingEvolves}：
+   * pendingEvolves 是跨页面/自动联动导致的待演升级，入队补播（演完调 evolve-seen）。
+   */
   async function loadPets() {
-    pets.value = await http.get('/pet/pets')
+    const data = await http.get('/pet/pets')
+    pets.value = data.pets || data
+    const pending = (data.pendingEvolves || []).map(u => ({ ...u, pending: true }))
+    enqueueEvolves(pending)
   }
   async function loadRules() {
     rules.value = await http.get('/pet/rules')
   }
+  /** 加载皮肤（内置 + 本账号自创），并同步模块级缓存供 petImg 映射 */
+  async function loadSkins() {
+    skins.value = await http.get('/pet/skins')
+    setSkinCache(skins.value)
+  }
   function rulesOfCat(c) {
     return rules.value.filter(r => r.category === c)
+  }
+
+  // ---------- 全屏进化演出队列 ----------
+  const evolveQueue = ref([])   // 待演分幕
+  const currentEvolve = ref(null) // 正在演的一幕（传给 EvolutionShow 组件）
+  let evolveBusy = false
+  let resolveScene = null
+
+  /** 升级事件入队（来源：同步接口 levelUps / 跨页 pendingEvolves）；同一学生去重防重复入队 */
+  function enqueueEvolves(ups) {
+    if (!ups?.length) return
+    for (const u of ups) {
+      const fromLevel = u.fromLevel ?? (u.toLevel - 1)
+      const dup = currentEvolve.value?.studentId === u.studentId ||
+        evolveQueue.value.some(q => q.studentId === u.studentId)
+      if (dup) continue
+      evolveQueue.value.push({
+        studentId: u.studentId, name: u.name, petName: u.petName,
+        fromLevel, toLevel: u.toLevel,
+        skinKey: u.skinKey || 'dragon', fxTheme: u.fxTheme || 'gold',
+        fromImg: skinImg(u.skinKey || 'dragon', fromLevel),
+        toImg: skinImg(u.skinKey || 'dragon', u.toLevel),
+        pending: !!u.pending
+      })
+    }
+    void pumpEvolve()
+  }
+
+  /** 逐幕播放，幕间 0.3s；组件播完/跳过调 onEvolveDone 放行 */
+  async function pumpEvolve() {
+    if (evolveBusy) return
+    evolveBusy = true
+    while (evolveQueue.value.length) {
+      currentEvolve.value = evolveQueue.value.shift()
+      await new Promise(res => { resolveScene = res })
+      await new Promise(r => setTimeout(r, 300))
+    }
+    currentEvolve.value = null
+    evolveBusy = false
+  }
+
+  /** 一幕结束：跨页 pending 来源通知后端清 evolve_pending 标记 */
+  async function onEvolveDone() {
+    const scene = currentEvolve.value
+    currentEvolve.value = null
+    if (scene?.pending) {
+      try { await http.post('/pet/evolve-seen', { studentId: scene.studentId }) } catch (e) { /* 标记清理失败不阻塞 */ }
+    }
+    resolveScene?.()
+    resolveScene = null
   }
 
   // ---------- 卡片交互（未排座宠物卡用；座位卡点击由调用方区分拖拽后调用） ----------
@@ -106,13 +230,38 @@ export function usePets() {
   }
 
   // ---------- 领养 ----------
-  function openAdopt(p) {
+  async function openAdopt(p) {
     adoptTarget.value = p
     adoptName.value = ''
+    adoptSkin.value = 'dragon'
+    await loadSkins()
     adoptDlg.value = true
   }
+  /** 打开「自创宠物」弹窗（保存后由 SkinMakerDlg emit saved 触发刷新与选中） */
+  function openSkinMaker() {
+    skinMakerDlg.value = true
+  }
+  /** 自创皮肤保存回调：刷新皮肤列表并选中新皮肤 */
+  async function onSkinSaved(skinKey) {
+    await loadSkins()
+    if (skinKey) adoptSkin.value = skinKey
+  }
+  /** 删除自创皮肤（后端禁删已被引用的）；删除后选中项回退内置云龙 */
+  async function deleteSkin(sk) {
+    try {
+      await ElMessageBox.confirm(`确认删除自创皮肤「${sk.name}」？`, '提示', { type: 'warning' })
+    } catch { return }
+    await http.delete(`/pet/skin/${sk.id}`)
+    ElMessage.success('皮肤已删除')
+    if (adoptSkin.value === sk.skinKey) adoptSkin.value = 'dragon'
+    await loadSkins()
+  }
   async function doAdopt() {
-    await http.post('/pet/adopt', { studentId: adoptTarget.value.studentId, petKey: 'dragon', petName: adoptName.value })
+    await http.post('/pet/adopt', {
+      studentId: adoptTarget.value.studentId,
+      petKey: adoptSkin.value,
+      petName: adoptName.value
+    })
     ElMessage.success('领养成功！精灵破壳啦 🐣')
     adoptDlg.value = false
     await loadPets()
@@ -146,20 +295,25 @@ export function usePets() {
     evalCat.value = '学习'
     evalDlg.value = true
   }
-  /** 点评价项：单人即时生效 / 批量一次生效，并飘字 */
+  /**
+   * 点评价项：单人即时生效 / 批量一次生效。
+   * 飘字错峰 0.1s（批量像放小鞭炮）；响应 levelUps 排入全屏进化演出。
+   */
   async function applyRule(rule) {
+    const sids = evalBatch.value ? [...selected.value] : [evalTarget.value.studentId]
+    const r = evalBatch.value
+      ? await http.post('/pet/evaluate-batch', { ruleId: rule.id, studentIds: sids })
+      : await http.post('/pet/evaluate', { studentId: sids[0], ruleId: rule.id })
+    if (!evalBatch.value && !r.affected) { ElMessage.warning('该学生还未领养宠物'); return }
+    sids.forEach((sid, i) => setTimeout(() => addFloat(sid, rule.score), i * 100))
     if (evalBatch.value) {
-      const r = await http.post('/pet/evaluate-batch', { ruleId: rule.id, studentIds: [...selected.value] })
       ElMessage.success(`已对 ${r.affected} 名学生的宠物生效`)
       selected.value = new Set()
       batchMode.value = false
-    } else {
-      const r = await http.post('/pet/evaluate', { studentId: evalTarget.value.studentId, ruleId: rule.id })
-      if (!r.affected) { ElMessage.warning('该学生还未领养宠物'); return }
-      addFloat(evalTarget.value.studentId, rule.score)
     }
     evalDlg.value = false
     await loadPets()
+    enqueueEvolves(r.levelUps)
     if (detailDlg.value && detailStudent.value) {
       detailStudent.value = pets.value.find(x => x.studentId === detailStudent.value.studentId)
       detailLogs.value = await http.get('/pet/logs', { params: { studentId: detailStudent.value.studentId } })
@@ -202,6 +356,7 @@ export function usePets() {
     if (!exchangeSid.value) { ElMessage.warning('请先选择学生'); return }
     await http.post('/pet/exchange', { studentId: exchangeSid.value, itemId: it.id })
     ElMessage.success(`兑换成功：${it.name}，记得线下兑现哦 🎁`)
+    addFloat(exchangeSid.value, 0, { coins: true })
     await Promise.all([loadShop(), loadExchanges(), loadPets()])
   }
   async function fulfill(id) {
@@ -250,23 +405,25 @@ export function usePets() {
     await loadRules()
   }
 
-  // 初始加载宠物与评价项
-  void Promise.all([loadPets(), loadRules()])
+  // 初始加载宠物、评价项与皮肤
+  void Promise.all([loadPets(), loadRules(), loadSkins()])
 
   return {
     // 状态
-    pets, rules, selected, batchMode, floats,
-    adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg,
-    adoptName, adoptTarget, detailStudent, detailLogs, evalBatch, evalTarget, evalCat,
+    pets, rules, skins, selected, batchMode, floats, popKind,
+    adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
+    adoptName, adoptSkin, adoptTarget, detailStudent, detailLogs, evalBatch, evalTarget, evalCat,
     gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
+    // 进化演出
+    currentEvolve, enqueueEvolves, onEvolveDone,
     // 工具
-    petImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat,
+    petImg, skinImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
     // 交互
     onCardClick, togglePick, toggleBatch,
-    openAdopt, doAdopt, openDetail, revokeLog,
+    openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, openDetail, revokeLog,
     openEvalSingle, openEvalBatch, applyRule, doGraduate,
     openRanking, openShop, doExchange, fulfill, saveItem, deleteItem,
     openRules, saveRule, toggleRule, deleteRule,
-    loadPets
+    loadPets, loadSkins
   }
 }

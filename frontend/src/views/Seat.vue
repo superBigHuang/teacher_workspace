@@ -61,10 +61,11 @@
       <!-- 过道（贯穿所有排） -->
       <div v-for="aisleCol in aisleDisplayColumns" :key="'ag'+aisleCol" class="aisle-gutter"
            :style="{ gridRow: `2 / ${rows + 2}`, gridColumn: aisleCol + 1 }"></div>
-      <!-- 座位 -->
+      <!-- 座位（data-sid 供全屏进化演出定位；格内只放宠物与天气特效） -->
       <div v-for="s in seats" :key="s.row + '-' + s.col"
-           class="seat" :class="seatClass(s)"
+           class="seat" :class="[seatClass(s), { 'star-today': petOf(s)?.starToday }]"
            :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }"
+           :data-sid="s.studentId || undefined"
            :draggable="!!s.studentId && !batchMode"
            @dragstart="onDragStart($event, s)" @dragover.prevent @drop="onDrop($event, s)"
            @pointerdown="onSeatDown($event, s)" @pointerup="onSeatUp($event)">
@@ -73,15 +74,27 @@
           <div class="seat-pet">
             <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(s.studentId)"
               @click.stop @change="togglePick(s.studentId)" />
-            <span v-if="petOf(s)?.dizzy" class="seat-flag">💫</span>
-            <span v-if="petOf(s)?.frozen" class="seat-flag flag-fz">🥶</span>
+            <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
+            <span v-if="petOf(s)?.dizzy" class="wx-cloud">☁️<i class="wx-drop">💧</i></span>
+            <template v-if="petOf(s)?.frozen">
+              <i v-for="n in 3" :key="'fz'+n" class="wx-snow" :style="snowStyle(n)">❄️</i>
+            </template>
             <span v-if="petOf(s)?.broken" class="seat-flag flag-bk">🩹</span>
+            <span v-if="petOf(s)?.starToday" class="wx-star">🌈</span>
             <span v-if="petOf(s)?.graduatedCount > 0" class="seat-flag flag-grad">🎓{{ petOf(s).graduatedCount }}</span>
+            <!-- Lv4/5 常驻光环 + Lv5 闪点 -->
+            <span v-if="petOf(s)?.petId && petOf(s).level >= 4" class="wx-aura" :class="{ lv5: petOf(s).level >= 5 }"><i class="aura-rot"></i></span>
+            <template v-if="petOf(s)?.petId && petOf(s).level >= 5">
+              <i v-for="n in 3" :key="'sp'+n" class="wx-spark" :style="sparkStyle(n)"></i>
+            </template>
             <img class="seat-pet-img"
-              :class="{ alive: petOf(s)?.petId, dizzy: petOf(s)?.dizzy, frozen: petOf(s)?.frozen, broken: petOf(s)?.broken }"
+              :class="[{ alive: petOf(s)?.petId, frozen: petOf(s)?.frozen, broken: petOf(s)?.broken }, popClass(s.studentId)]"
               :src="petImg(petOf(s))" alt="宠物">
             <span v-for="f in floatsOf(s.studentId)" :key="f.id" class="float-score"
-              :class="f.good ? 'good' : 'bad'">{{ f.text }}</span>
+              :class="f.good ? 'good' : 'bad'">{{ f.text }}
+              <i v-for="(e, ei) in f.ems" :key="ei" class="float-em"
+                 :class="e.cls" :style="{ '--dx': e.dx + 'px', animationDelay: e.delay + 'ms' }">{{ e.emoji }}</i>
+            </span>
           </div>
         </template>
         <template v-else><div class="empty">— 空 —</div></template>
@@ -93,19 +106,32 @@
       <div class="unseat-title">🐾 未排座学生（{{ unSeatedPets.length }} 人，宠物仍可照料）</div>
       <div class="pet-grid">
         <div v-for="p in unSeatedPets" :key="p.studentId" class="pet-card"
-          :class="{ dizzy: p.dizzy, frozen: p.frozen, broken: p.broken, picked: selected.has(p.studentId) }"
+          :class="{ frozen: p.frozen, broken: p.broken, picked: selected.has(p.studentId), 'star-today': p.starToday }"
+          :data-sid="p.studentId"
           @click="onCardClick(p)">
           <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(p.studentId)"
             @click.stop @change="togglePick(p.studentId)" />
-          <span v-if="p.dizzy" class="flag flag-dizzy">💫</span>
-          <span v-if="p.frozen" class="flag flag-frozen">🥶</span>
+          <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
+          <span v-if="p.dizzy" class="wx-cloud"><i class="wx-drop">💧</i>☁️</span>
+          <template v-if="p.frozen">
+            <i v-for="n in 3" :key="'fz'+n" class="wx-snow" :style="snowStyle(n)">❄️</i>
+          </template>
           <span v-if="p.broken" class="flag flag-broken">🩹</span>
+          <span v-if="p.starToday" class="wx-star">🌈</span>
           <span v-if="p.graduatedCount > 0" class="flag flag-grad">🎓{{ p.graduatedCount }}</span>
 
           <div class="pet-img-wrap">
-            <img class="pet-img" :class="{ alive: p.petId }" :src="petImg(p)" alt="宠物">
+            <span v-if="p.petId && p.level >= 4" class="wx-aura" :class="{ lv5: p.level >= 5 }"><i class="aura-rot"></i></span>
+            <template v-if="p.petId && p.level >= 5">
+              <i v-for="n in 3" :key="'sp'+n" class="wx-spark" :style="sparkStyle(n)"></i>
+            </template>
+            <img class="pet-img" :class="[{ alive: p.petId, frozen: p.frozen, broken: p.broken }, popClass(p.studentId)]"
+              :src="petImg(p)" alt="宠物">
             <span v-for="f in floatsOf(p.studentId)" :key="f.id" class="float-score"
-              :class="f.good ? 'good' : 'bad'">{{ f.text }}</span>
+              :class="f.good ? 'good' : 'bad'">{{ f.text }}
+              <i v-for="(e, ei) in f.ems" :key="ei" class="float-em"
+                 :class="e.cls" :style="{ '--dx': e.dx + 'px', animationDelay: e.delay + 'ms' }">{{ e.emoji }}</i>
+            </span>
           </div>
 
           <template v-if="p.petId">
@@ -122,10 +148,28 @@
       </div>
     </div>
 
-    <!-- 领养弹窗 -->
-    <el-dialog v-model="adoptDlg" title="🥚 领养守护精灵" width="380px" align-center>
+    <!-- 领养弹窗：选种族（内置+自创皮肤）→ 预览 6 阶段 → 起名 -->
+    <el-dialog v-model="adoptDlg" title="🥚 领养守护精灵" width="620px" align-center>
+      <div class="skin-pick">
+        <div v-for="sk in skins" :key="sk.skinKey" class="skin-card"
+             :class="{ active: adoptSkin === sk.skinKey }" @click="adoptSkin = sk.skinKey">
+          <img :src="skinImg(sk.skinKey, 5)" :alt="sk.name">
+          <div class="skin-card-name">{{ sk.name }}</div>
+          <i class="skin-card-dot" :style="{ background: FX_THEMES[sk.fxTheme]?.beam || '#FFD98A' }"></i>
+          <span v-if="!sk.builtIn" class="skin-card-del" title="删除该自创皮肤" @click.stop="deleteSkin(sk)">🗑</span>
+        </div>
+        <div class="skin-card skin-add" @click="openSkinMaker">
+          <div class="skin-add-plus">➕</div>
+          <div class="skin-card-name">自创宠物</div>
+        </div>
+      </div>
+      <div class="skin-preview">
+        <div v-for="st in SKIN_STAGES" :key="st.k" class="skin-preview-item">
+          <img :src="skinImg(adoptSkin, st.k)" alt="">
+          <span>{{ st.label }}</span>
+        </div>
+      </div>
       <div class="adopt-body">
-        <img class="adopt-img" src="/pets/dragon_1.webp" alt="云小龙">
         <p class="adopt-tip">一颗温热的精灵蛋正在微微发光……<br>给Ta起个名字，一起成长吧！</p>
         <el-input v-model="adoptName" maxlength="12" placeholder="给宠物起个中文名，如：云小龙" />
       </div>
@@ -217,7 +261,7 @@
           <span class="rank-medal">
             {{ r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : (r.rank ? r.rank : '—') }}
           </span>
-          <img class="rank-img" :src="`/pets/dragon_${r.level}.webp`" alt="">
+          <img class="rank-img" :src="petImg(r)" alt="">
           <span class="rank-pet">{{ r.petName }}</span>
           <span class="rank-stu">{{ r.name }}</span>
           <span class="rank-lv">Lv.{{ r.level }}</span>
@@ -310,6 +354,11 @@
         </el-tab-pane>
       </el-tabs>
     </el-dialog>
+
+    <!-- 自创宠物皮肤弹窗 -->
+    <SkinMakerDlg v-model="skinMakerDlg" @saved="onSkinSaved" />
+    <!-- 全屏进化演出（升级时 6 秒分镜，点击跳过） -->
+    <EvolutionShow :scene="currentEvolve" @done="onEvolveDone" />
   </div>
 </template>
 
@@ -319,9 +368,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import http from '../api/http'
 import { usePets, PET_CATS } from '../composables/usePets'
+import EvolutionShow from '../components/EvolutionShow.vue'
+import SkinMakerDlg from '../components/SkinMakerDlg.vue'
 
 /** 评价项分类（固定四个 tab） */
 const CATS = PET_CATS
+
+/** 皮肤预览的 6 个阶段（蛋 + Lv1~5） */
+const SKIN_STAGES = [
+  { k: 'egg', label: '蛋' },
+  { k: 1, label: 'Lv1' }, { k: 2, label: 'Lv2' }, { k: 3, label: 'Lv3' },
+  { k: 4, label: 'Lv4' }, { k: 5, label: 'Lv5' }
+]
 
 // ==================== 座次表 ====================
 const rows = ref(7)
@@ -404,13 +462,14 @@ async function onDrop(e, target) {
 
 // ==================== 宠物园（逻辑复用 usePets） ====================
 const {
-  pets, selected, batchMode, floats,
-  adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg,
-  adoptName, detailStudent, detailLogs, evalBatch, evalCat,
+  pets, skins, selected, batchMode, floats, popKind,
+  adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
+  adoptName, adoptSkin, detailStudent, detailLogs, evalBatch, evalCat,
   gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
-  petImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat,
+  currentEvolve, onEvolveDone,
+  petImg, skinImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
   onCardClick, togglePick, toggleBatch,
-  openAdopt, doAdopt, revokeLog,
+  openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, revokeLog,
   openEvalSingle, openEvalBatch, applyRule, doGraduate,
   openRanking, openShop, doExchange, fulfill, saveItem, deleteItem,
   openRules, saveRule, toggleRule, deleteRule
@@ -419,6 +478,19 @@ const {
 /** 取座位上学生对应的宠物状态（/pet/pets 返回全班，含未领养） */
 function petOf(s) {
   return pets.value.find(p => p.studentId === s.studentId)
+}
+/** 评价后宠物图 Q 弹（加分）/ 缩一下（扣分）的 class */
+function popClass(sid) {
+  const k = popKind.value.get(sid)
+  return k === 'pop' ? 'pet-pop' : k === 'shrink' ? 'pet-shrink' : ''
+}
+/** frozen 状态 3 片 ❄️ 的错峰位置/延迟 */
+function snowStyle(n) {
+  return { left: [16, 50, 80][n - 1] + '%', animationDelay: [0, 1.1, 2.0][n - 1] + 's' }
+}
+/** Lv5 周身 3 个 ✨ 闪点的错峰位置/延迟 */
+function sparkStyle(n) {
+  return { left: [10, 72, 44][n - 1] + '%', top: [10, 18, -4][n - 1] + '%', animationDelay: [0, 0.7, 1.4][n - 1] + 's' }
 }
 /** 已排座学生 id 集合 */
 const seatedIds = computed(() => new Set(seats.value.filter(s => s.studentId).map(s => s.studentId)))
@@ -485,11 +557,11 @@ function onSeatUp(e) {
 .seat-pet-img { width: 96px; height: 96px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
-.seat-pet-img.dizzy { animation: pet-shake .5s ease-in-out infinite; }
 .seat-pet-img.frozen { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 6px rgba(120,190,255,.8)); }
 .seat-pet-img.broken { filter: grayscale(.9) contrast(.92); }
+/* Lv5 金描边（.wx-aura.lv5 与 img 为兄弟节点） */
+.wx-aura.lv5 ~ img { filter: drop-shadow(0 0 6px rgba(255,210,120,.95)) drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-flag { position: absolute; top: -6px; right: 16px; font-size: 16px; z-index: 2; }
-.seat-flag.flag-fz { top: 14px; }
 .seat-flag.flag-bk { top: 32px; right: 16px; }
 .seat-flag.flag-grad {
   right: 8px; top: -8px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
@@ -515,8 +587,6 @@ function onSeatUp(e) {
 .pet-card.picked { border-color: #ff9f5a; box-shadow: 0 0 0 3px rgba(255,159,90,.35); }
 .pick-box { position: absolute; top: 10px; left: 10px; z-index: 3; }
 .flag { position: absolute; top: 8px; z-index: 2; font-size: 18px; }
-.flag-dizzy { right: 10px; animation: spin-star 1.4s linear infinite; }
-.flag-frozen { right: 10px; top: 30px; }
 .flag-broken { left: 10px; bottom: 46px; }
 .flag-grad { right: 10px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
   border-radius: 10px; padding: 1px 7px; font-size: 12px; font-weight: 800; }
@@ -524,7 +594,6 @@ function onSeatUp(e) {
 .pet-img { width: 104px; height: 104px; object-fit: contain; }
 .pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 6px 8px rgba(220,160,110,.3)); }
 .pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
-.pet-card.dizzy .pet-img { animation: pet-shake .5s ease-in-out infinite; }
 .pet-card.frozen { background: linear-gradient(150deg, #eaf6ff, #d4ebff); border-color: #bfe0ff; }
 .pet-card.frozen .pet-img { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 8px rgba(120,190,255,.8)); }
 .pet-card.broken .pet-img { filter: grayscale(.9) contrast(.92); }
@@ -544,13 +613,30 @@ function onSeatUp(e) {
 .exp-fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #ffd98a, #ff9f5a); transition: width .4s; }
 .exp-text { font-size: 11px; color: #b48a68; }
 
-/* 飘字 */
+/* 飘字：加分金色、扣分灰红；内含迸溅 emoji（.float-em） */
 .float-score {
   position: absolute; left: 50%; top: 20px; font-size: 22px; font-weight: 900; pointer-events: none;
-  animation: float-up 1.2s ease-out forwards; z-index: 5;
+  animation: float-up 1.2s ease-out forwards; z-index: 5; white-space: nowrap;
 }
-.float-score.good { color: #4caf7d; text-shadow: 0 2px 0 #fff; }
-.float-score.bad { color: #ef6f6f; text-shadow: 0 2px 0 #fff; }
+.float-score.good { color: #f2991f; text-shadow: 0 2px 0 #fff, 0 0 12px rgba(255,200,90,.6); }
+.float-score.bad { color: #c26a6a; text-shadow: 0 2px 0 #fff; }
+.float-em {
+  position: absolute; left: 50%; top: 0; font-style: normal; font-size: 16px; pointer-events: none;
+  animation: em-burst 1.1s ease-out forwards;
+}
+/* 兑换金币：抛物线蹦出 */
+.float-em.coin { font-size: 20px; animation: coin-arc 1.2s ease-out forwards; }
+@keyframes em-burst {
+  0% { opacity: 0; transform: translate(0, 0) scale(.4); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), -42px) scale(1.15); }
+}
+@keyframes coin-arc {
+  0% { opacity: 0; transform: translate(0, 12px) scale(.5); }
+  20% { opacity: 1; }
+  60% { opacity: 1; transform: translate(calc(var(--dx) * .6), -48px) scale(1.1); }
+  100% { opacity: 0; transform: translate(var(--dx), -16px) scale(.9); }
+}
 
 /* 批量浮动条 */
 .batch-bar {
@@ -565,7 +651,6 @@ function onSeatUp(e) {
 
 /* 领养弹窗 */
 .adopt-body { text-align: center; padding: 6px 10px; }
-.adopt-img { width: 170px; height: 170px; object-fit: contain; animation: pet-breathe 3s ease-in-out infinite; }
 .adopt-tip { color: #a07a5c; font-size: 14px; line-height: 1.7; margin: 8px 0 14px; }
 
 /* 详情弹窗 */
@@ -667,16 +752,113 @@ function onSeatUp(e) {
   0%, 100% { transform: translateY(0) rotate(-1.2deg); }
   50% { transform: translateY(-7px) rotate(1.2deg); }
 }
-@keyframes pet-shake {
-  0%, 100% { transform: translateX(0) rotate(0); }
-  25% { transform: translateX(-3px) rotate(-4deg); }
-  75% { transform: translateX(3px) rotate(4deg); }
+/* ===== 天气/状态特效 ===== */
+/* 扣分头晕：小乌云漂浮，每 3 秒掉一滴雨 */
+.wx-cloud {
+  position: absolute; top: 0; right: 4px; font-size: 20px; z-index: 3; pointer-events: none;
+  animation: cloud-float 3s ease-in-out infinite;
 }
-@keyframes spin-star {
-  0% { transform: rotate(0) scale(1); }
-  50% { transform: rotate(180deg) scale(1.2); }
-  100% { transform: rotate(360deg) scale(1); }
+.wx-drop {
+  position: absolute; left: 45%; top: 90%; font-style: normal; font-size: 11px;
+  animation: rain-drop 3s linear infinite;
 }
+@keyframes cloud-float { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-3px); } }
+@keyframes rain-drop {
+  0% { opacity: 0; transform: translateY(-2px); }
+  25% { opacity: 1; }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(18px); }
+}
+/* 冰冻：3 片雪花飘落（错峰由 snowStyle 内联） */
+.wx-snow {
+  position: absolute; top: 4px; font-size: 13px; font-style: normal; z-index: 3; pointer-events: none;
+  animation: snow-fall 3.2s linear infinite;
+}
+@keyframes snow-fall {
+  0% { opacity: 0; transform: translateY(-4px) rotate(0); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(30px) rotate(200deg); }
+}
+/* 今日之星（当日正分合计≥5）：彩虹每 5 秒淡入 2 秒 */
+.wx-star {
+  position: absolute; top: -8px; left: 4px; font-size: 20px; z-index: 3; pointer-events: none;
+  animation: star-rainbow 5s ease-in-out infinite;
+}
+@keyframes star-rainbow {
+  0%, 100% { opacity: 0; transform: scale(.7) rotate(-10deg); }
+  40%, 80% { opacity: 1; transform: scale(1.1) rotate(8deg); }
+}
+/* 今日之星金边呼吸（座位格 / 宠物卡共用） */
+.seat.star-today, .pet-card.star-today { animation: star-border 5s ease-in-out infinite; }
+@keyframes star-border {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,205,100,0); }
+  50% { box-shadow: 0 0 0 3px rgba(255,205,100,.7), 0 0 22px rgba(255,205,100,.5); }
+}
+/* Lv4/5 脚下 conic 光环：Lv4 8s 淡，Lv5 5s 亮 */
+.wx-aura {
+  position: absolute; bottom: 0; left: 50%; width: 106px; height: 28px;
+  transform: translateX(-50%); border-radius: 50%; pointer-events: none; z-index: 0;
+  opacity: .25; filter: blur(5px);
+}
+.wx-aura .aura-rot {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, rgba(255,217,138,.95) 60deg,
+    transparent 130deg, transparent 220deg, rgba(255,217,138,.7) 280deg, transparent 340deg);
+  animation: aura-spin 8s linear infinite;
+}
+.wx-aura.lv5 { opacity: .5; width: 114px; }
+.wx-aura.lv5 .aura-rot { animation-duration: 5s; }
+@keyframes aura-spin { to { transform: rotate(360deg); } }
+/* Lv5 周身闪点（::before 承载 ✨，错峰由 sparkStyle 内联） */
+.wx-spark {
+  position: absolute; font-size: 14px; z-index: 3; pointer-events: none;
+  animation: spark-twinkle 2.1s ease-in-out infinite;
+}
+.wx-spark::before { content: '✨'; }
+@keyframes spark-twinkle {
+  0%, 100% { opacity: 0; transform: scale(.5) rotate(0); }
+  50% { opacity: 1; transform: scale(1.15) rotate(20deg); }
+}
+/* 评价反馈：加分 Q 弹、扣分缩一下（class 由 popKind 短暂挂载） */
+.seat-pet-img.pet-pop, .pet-img.pet-pop { animation: pet-q-pop .43s ease-in-out; }
+.seat-pet-img.pet-shrink, .pet-img.pet-shrink { animation: pet-q-shrink .33s ease-in-out; }
+@keyframes pet-q-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.18); }
+  70% { transform: scale(.94); }
+  100% { transform: scale(1); }
+}
+@keyframes pet-q-shrink {
+  0% { transform: scale(1); }
+  40% { transform: scale(.9); }
+  100% { transform: scale(1); }
+}
+
+/* ===== 领养弹窗：种族横向选择 + 6 阶段预览 ===== */
+.skin-pick { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 10px; }
+.skin-card {
+  position: relative; flex: 0 0 86px; border: 2px solid #f0e4d4; border-radius: 14px; background: #fffaf2;
+  padding: 8px 4px 6px; text-align: center; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s;
+}
+.skin-card:hover { transform: translateY(-3px); border-color: #ffc9a3; }
+.skin-card.active { border-color: #ff9f5a; background: #fff1e2; box-shadow: 0 0 0 3px rgba(255,159,90,.25); }
+.skin-card img { width: 56px; height: 56px; object-fit: contain; }
+.skin-card-name { font-size: 12px; font-weight: 800; color: #8a5a34; margin-top: 2px; }
+.skin-card-dot {
+  position: absolute; top: 6px; right: 8px; width: 10px; height: 10px; border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.skin-card-del { position: absolute; top: 4px; left: 6px; font-size: 13px; }
+.skin-add { display: flex; flex-direction: column; align-items: center; justify-content: center; border-style: dashed; color: #c0a898; }
+.skin-add-plus { font-size: 30px; line-height: 1; margin: 8px 0 6px; }
+.skin-preview {
+  display: flex; gap: 6px; justify-content: space-between;
+  background: #fff7ee; border-radius: 14px; padding: 10px 8px; margin-bottom: 14px;
+}
+.skin-preview-item { flex: 1; text-align: center; }
+.skin-preview-item img { width: 100%; max-width: 62px; height: 62px; object-fit: contain; }
+.skin-preview-item span { display: block; font-size: 11px; color: #b08a66; font-weight: 700; margin-top: 2px; }
+
 @keyframes float-up {
   0% { opacity: 0; transform: translate(-50%, 10px) scale(.8); }
   20% { opacity: 1; }

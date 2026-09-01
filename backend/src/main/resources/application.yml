@@ -26,6 +26,8 @@ app:
     # 生产环境请更换为随机长串
     secret: teacher-workplatform-secret-key-change-me-0123456789abcdef
     expire-hours: 72
+  # 本地上传目录（自定义宠物皮肤图片）；经 /uploads/** 静态映射访问，部署时可用 UPLOAD_DIR 覆盖
+  upload-dir: ${UPLOAD_DIR:./uploads}
 
 ai:
   defaults:

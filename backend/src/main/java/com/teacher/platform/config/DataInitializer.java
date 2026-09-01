@@ -43,6 +43,7 @@ public class DataInitializer implements CommandLineRunner {
         seedGlobalPeriods();
         seedGlobalRules();
         seedBuiltinAchievements();
+        seedBuiltinSkin();
         seedAdmin();
     }
 
@@ -58,6 +59,9 @@ public class DataInitializer implements CommandLineRunner {
         ensureColumn("duty_roster", "task_id", "task_id BIGINT NULL COMMENT '分配的值日事项'");
         // 考勤关联请假单：请假登记自动写入的考勤带 leave_id，删单时精确回滚（手动标记不受影响）
         ensureColumn("attendance", "leave_id", "leave_id BIGINT NULL COMMENT '关联请假单 leave_record.id'");
+        // 宠物 v1.1：跨页面升级待演标记
+        ensureColumn("pet", "evolve_pending",
+                "evolve_pending TINYINT NOT NULL DEFAULT 0 COMMENT '跨页面升级待演标记'");
 
         // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
         rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");
@@ -199,6 +203,19 @@ public class DataInitializer implements CommandLineRunner {
                             "VALUES(0,?,?,?,?,'AUTO',?,?,1,1)",
                     d[0], d[1], d[2], d[3], d[4], d[5]);
         }
+    }
+
+    /**
+     * 内置宠物皮肤：云小龙（user_id=NULL 全局共享，所有账号可见可领养）。
+     * 自定义皮肤由老师在「自创宠物」弹窗上传，按账号隔离。
+     */
+    private void seedBuiltinSkin() {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM pet_skin WHERE skin_key='dragon'", Integer.class);
+        if (n != null && n > 0) return;
+        jdbc.update("INSERT INTO pet_skin(user_id,skin_key,name,built_in,fx_theme," +
+                        "img_egg,img_1,img_2,img_3,img_4,img_5) VALUES(NULL,'dragon','云小龙',1,'gold',?,?,?,?,?,?)",
+                "/pets/dragon_egg.webp", "/pets/dragon_1.webp", "/pets/dragon_2.webp",
+                "/pets/dragon_3.webp", "/pets/dragon_4.webp", "/pets/dragon_5.webp");
     }
 
     // ---------- 默认 admin 账号 ----------
