@@ -46,7 +46,7 @@
     <el-card class="block">
       <div class="block-head">
         <h3 class="block-title">📉 本次考试成绩分布</h3>
-        <el-select v-model="lineSubject" size="small" style="width:140px" @change="renderLine">
+        <el-select v-model="lineSubject" size="small" style="width:140px" @change="loadLine">
           <el-option v-for="s in subjectStats" :key="s.subject" :label="s.subject" :value="s.subject" />
         </el-select>
       </div>
@@ -103,14 +103,18 @@
     </el-card>
 
     <!-- 导入弹窗 -->
-    <el-dialog v-model="importDlg" title="导入成绩" width="420px">
+    <el-dialog v-model="importDlg" title="导入成绩" width="520px">
       <el-form label-width="90px">
         <el-form-item label="考试名称"><el-input v-model="importForm.name" placeholder="如：2026秋季第一次月考" /></el-form-item>
         <el-form-item label="考试日期"><el-date-picker v-model="importForm.date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
         <el-form-item label="成绩文件">
           <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls" :limit="1">
-            <el-button :icon="Upload">选择 Excel（.xls/.xlsx，表头：学号|姓名|科目...）</el-button>
+            <el-button :icon="Upload">选择 Excel 文件</el-button>
           </el-upload>
+          <div class="import-tip">
+            支持 .xls / .xlsx。表头格式：<b>学号 | 姓名 | 科目1 | 科目2 …</b>（如：学号|姓名|语文|数学|英语，科目列名即科目名，可自行增减）<br>
+            匹配规则：<b>先按姓名匹配</b>，姓名匹配不上再按学号；重名时以学号区分。
+          </div>
         </el-form-item>
       </el-form>
     </el-dialog>
@@ -327,13 +331,10 @@ function renderBar(dist) {
   })
 }
 
+/** 拉取单科折线数据；数据写入 lineData 后由 watch(lineData) 触发 drawLine 重绘（勿在末尾再触发加载，会成请求死循环） */
 async function loadLine() {
   if (!lineSubject.value) return
   lineData.value = await http.get('/score/line', { params: { examId: curExam.value, subject: lineSubject.value } })
-  nextTick(renderLine)
-}
-function renderLine() {
-  loadLine()
 }
 function drawLine() {
   if (!lineEl.value || !lineData.value.names) return
@@ -421,6 +422,7 @@ onMounted(loadExams)
 </script>
 
 <style scoped>
+.import-tip { margin-top: 8px; font-size: 12px; line-height: 1.8; color: #8a8fa3; background: #f6f8fc; border-radius: 8px; padding: 8px 12px; }
 .score-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 8px; }
 .score-col { margin-bottom: 8px; }
 .score-card { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 4px 14px rgba(120,130,160,.08); border-top: 3px solid #f78fb3; }

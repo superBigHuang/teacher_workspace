@@ -369,12 +369,24 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await importExam(request, 'E2E月考', '2026-08-01', 13)
       await nav(page, '成绩分析').click()
       await expect(page).toHaveURL(/\/score/)
+      // 主动选中本次导入的 E2E月考（默认选日期最新考试，可能是老师的真实考试，科目数不定）
+      await page.locator('.el-select').nth(0).click()
+      await page.getByRole('option', { name: /E2E月考/ }).click()
       await expect.poll(async () =>
         await page.locator('.score-card').count(), { timeout: 20000 }).toBeGreaterThanOrEqual(3)
       await expect.poll(async () =>
         await page.locator('canvas').count(), { timeout: 20000 }).toBeGreaterThanOrEqual(2)
       await expect.poll(async () =>
         await page.locator('.el-table__row').count(), { timeout: 20000 }).toBeGreaterThan(35)
+      // 防 /score/line 请求死循环回归：加载完成后请求数应稳定（间隔 1.5s 两次计数相等且总量 <10）
+      const lineCount = () => page.evaluate(() =>
+        performance.getEntriesByType('resource').filter(r => r.name.includes('/score/line')).length)
+      await page.waitForTimeout(2500)
+      const c1 = await lineCount()
+      await page.waitForTimeout(1500)
+      const c2 = await lineCount()
+      expect(c2).toBe(c1)
+      expect(c1).toBeLessThan(10)
     })
 
     await test.step('成绩分析：选择对比考试 → 进退步对比表', async () => {

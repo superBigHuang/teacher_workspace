@@ -57,7 +57,7 @@ public class ScoreController extends BaseController {
         return Result.ok();
     }
 
-    /** 导入成绩 xlsx：表头 学号 | 姓名 | 科目1 | 科目2 ... */
+    /** 导入成绩 xlsx：表头 学号 | 姓名 | 科目1 | 科目2 ...；学生匹配先姓名后学号（见 findStudentId） */
     @PostMapping("/import")
     public Result<Map<String, Object>> importScore(@RequestParam("file") MultipartFile file,
                                                    @RequestParam String examName,
@@ -113,16 +113,26 @@ public class ScoreController extends BaseController {
         return Result.ok(result);
     }
 
+    /**
+     * 成绩行匹配在籍学生：先按姓名（成绩表学号常为考号/格式不一，姓名通常准确）——
+     * 姓名唯一命中即用；重名时用学号在同名候选中区分；姓名匹配不上再按学号兜底。
+     * 都匹配不上返回 null（成绩仍落库，按姓名归组显示，只是不进在籍学生统计）。
+     */
     private Long findStudentId(Long uid, String stuNo, String name) {
         try {
+            if (!name.isBlank()) {
+                List<Map<String, Object>> byName = jdbc.queryForList(
+                        "SELECT id FROM student WHERE user_id=? AND name=?", uid, name);
+                if (byName.size() == 1) return ((Number) byName.get(0).get("id")).longValue();
+                if (byName.size() > 1 && !stuNo.isBlank()) {
+                    List<Map<String, Object>> both = jdbc.queryForList(
+                            "SELECT id FROM student WHERE user_id=? AND name=? AND stu_no=?", uid, name, stuNo);
+                    if (!both.isEmpty()) return ((Number) both.get(0).get("id")).longValue();
+                }
+            }
             if (!stuNo.isBlank()) {
                 List<Map<String, Object>> l = jdbc.queryForList(
                         "SELECT id FROM student WHERE user_id=? AND stu_no=?", uid, stuNo);
-                if (!l.isEmpty()) return ((Number) l.get(0).get("id")).longValue();
-            }
-            if (!name.isBlank()) {
-                List<Map<String, Object>> l = jdbc.queryForList(
-                        "SELECT id FROM student WHERE user_id=? AND name=?", uid, name);
                 if (!l.isEmpty()) return ((Number) l.get(0).get("id")).longValue();
             }
         } catch (Exception ignored) {}
