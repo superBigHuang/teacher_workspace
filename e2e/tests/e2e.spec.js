@@ -937,6 +937,19 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const mine = skins.find(s => s.skinKey === skinKey)
       expect(mine.fxTheme).toBe('ice')
       for (const k of ['egg', '1', '2', '3', '4', '5']) expect(mine.imgs[k]).toContain('/uploads/')
+      // 内置 6 套皮肤齐全：skin_key/中文名/fx_theme 与 DataInitializer 种子一致
+      const expectBuiltin = {
+        dragon: ['云小龙', 'gold'], firedragon: ['烈焰神龙', 'fire'], catdragon: ['灵翼喵龙', 'ice'],
+        candy: ['糖果天使龙', 'candy'], forest: ['青叶森龙', 'forest'], moonrabbit: ['月华仙兔', 'thunder']
+      }
+      const builtin = skins.filter(s => s.builtIn)
+      expect(builtin.length).toBe(6)
+      for (const [key, [name, fx]] of Object.entries(expectBuiltin)) {
+        const s = builtin.find(x => x.skinKey === key)
+        expect(s).toBeTruthy()
+        expect(s.name).toBe(name)
+        expect(s.fxTheme).toBe(fx)
+      }
 
       // 第二个临时学生（不污染 40 名真实学生；afterAll 级联清理）
       const add2 = await apiPost('/roster/student', { stuNo: '998', name: 'E2E皮肤生', gender: '女' })
@@ -950,6 +963,17 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await card2.click()
       const adoptDlg = page.locator('.el-dialog', { hasText: '领养守护精灵' })
       await expect(adoptDlg).toBeVisible()
+      // 内置 6 张种族卡：逐一点击，6 阶段预览图全部真实加载（naturalWidth>0，回归线上 /pets 裂图）
+      for (const key of ['dragon', 'firedragon', 'catdragon', 'candy', 'forest', 'moonrabbit']) {
+        await adoptDlg.locator(`.skin-card:has(img[src*="/pets/${key}_5"])`).click()
+        await expect.poll(async () => {
+          const imgs = adoptDlg.locator('.skin-preview img')
+          // evaluateAll 回调在浏览器上下文执行，key 需作为第二参数显式传入
+          return await imgs.evaluateAll((nodes, k) =>
+            nodes.length === 6 && nodes.every(n => n.complete && n.naturalWidth > 0)
+              && nodes.every(n => n.src.includes(`/pets/${k}_`)) ? 6 : 0, key)
+        }, { timeout: 10000 }).toBe(6)
+      }
       const customCard = adoptDlg.locator('.skin-card', { hasText: 'E2E冰麒麟' })
       await expect(customCard).toBeVisible()
       await customCard.click()
@@ -998,6 +1022,118 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.reload()
       await expect(page).toHaveURL(/\/dashboard/)
       await expect(page.locator('.greet-title')).toBeVisible()
+    })
+
+    // ============ 12.7 手机遥控（SSE 通道 / 手机页 / 待播进化播放 / 远程切页） ============
+    await test.step('手机遥控：手机端加分攒待播、一键播放进化、远程切页/找人高亮', async () => {
+      // --- 数据准备：E2E遥控生(997) + 领养宠物 ---
+      const add3 = await request.post(API + '/roster/student', {
+        headers: authHeader(), data: { stuNo: '997', name: 'E2E遥控生', gender: '男' }
+      })
+      const sid3 = (await add3.json()).data
+      await request.post(API + '/pet/adopt', {
+        headers: authHeader(), data: { studentId: sid3, petKey: 'dragon', petName: 'E2E遥控龙' }
+      })
+      const rulesResp = await (await request.get(API + '/pet/rules', { headers: authHeader() })).json()
+      const rulePlus = (rulesResp.data || []).filter(r => r.score > 0).sort((a, b) => b.score - a.score)[0]
+      const timesToLv2 = Math.ceil(40 / rulePlus.score)
+
+      try {
+        // --- 链路 A：PC 开座次表（MainLayout 已建 SSE 遥控通道） ---
+        await page.goto('/seat')
+        await page.waitForTimeout(2000) // 等 ticket→EventSource 建连、置 remoteActive
+
+        // 手机端 defer 连加到升级：升级置 evolve_pending 攒待播队列，PC 不自动弹演出
+        for (let i = 0; i < timesToLv2; i++) {
+          await request.post(API + '/pet/evaluate', {
+            headers: authHeader(), data: { studentId: sid3, ruleId: rulePlus.id, defer: true }
+          })
+        }
+        const petsResp1 = (await (await request.get(API + '/pet/pets', { headers: authHeader() })).json()).data
+        expect(petsResp1.pendingEvolves.some(u => u.studentId === sid3)).toBeTruthy()
+        // 遥控在线：1.5s 内演出不自动弹出
+        await page.waitForTimeout(1500)
+        expect(await page.locator('.evo-overlay').count()).toBe(0)
+
+        // 手机发"全部播放"指令 → PC 连播进化演出 → 跳过后 evolve-seen 清场
+        await request.post(API + '/remote/cmd', {
+          headers: authHeader(), data: { action: 'evolve.playAll', payload: {} }
+        })
+        await expect(page.locator('.evo-overlay')).toBeVisible({ timeout: 8000 })
+        await expect(page.locator('.evo-title')).toContainText(/进\s*化\s*成\s*功/)
+        await expect(page.locator('.evo-sub')).toContainText('Lv.2')
+        await page.locator('.evo-overlay').click({ position: { x: 40, y: 40 } })
+        await expect.poll(async () => {
+          const d = (await (await request.get(API + '/pet/pets', { headers: authHeader() })).json()).data
+          return d.pendingEvolves.some(u => u.studentId === sid3)
+        }, { timeout: 10000 }).toBeFalsy()
+
+        // --- 链路 B：远程切页 + 找人高亮（用已排座的真实学生，遥控生未排座） ---
+        await request.post(API + '/remote/cmd', {
+          headers: authHeader(), data: { action: 'navigate', payload: { path: '/roster' } }
+        })
+        await expect(page).toHaveURL(/\/roster/, { timeout: 5000 })
+        const grid = (await (await request.get(API + '/seat/grid', { headers: authHeader() })).json()).data
+        const seatedSid = grid.seats.find(s => s.studentId)?.studentId
+        await request.post(API + '/remote/cmd', {
+          headers: authHeader(), data: { action: 'spotlight', payload: { studentId: seatedSid } }
+        })
+        await expect.poll(async () =>
+          await page.locator('.remote-spot').count(), { timeout: 8000 }).toBeGreaterThan(0)
+
+        // --- 链路 C：手机页 /m（手机视口，同 context 共享登录态） ---
+        const phone = await page.context().newPage()
+        await phone.setViewportSize({ width: 390, height: 844 })
+        await phone.goto('/m')
+        await phone.waitForTimeout(1500) // 手机页 SSE 建连
+        await expect(phone.locator('.m-pet', { hasText: 'E2E遥控生' })).toBeVisible({ timeout: 10000 })
+
+        // 手机端点学生 → 规则大按钮加分（defer 走 REMOTE 来源）→ toast 可撤销
+        await phone.locator('.m-pet', { hasText: 'E2E遥控生' }).click()
+        await expect(phone.locator('.m-sheet')).toBeVisible()
+        await phone.locator('.rule-btn.good').first().click()
+        await expect(phone.locator('.m-toast')).toBeVisible({ timeout: 5000 })
+        const logs1 = (await (await request.get(API + '/pet/logs',
+          { headers: authHeader(), params: { studentId: sid3 } })).json()).data
+        expect(logs1[0].source).toBe('REMOTE')
+        await phone.locator('.toast-undo').click() // 撤销 → 成长值回退到 40
+        await expect.poll(async () => {
+          const d = (await (await request.get(API + '/pet/pets', { headers: authHeader() })).json()).data
+          return d.pets.find(x => x.studentId === sid3)?.exp
+        }, { timeout: 8000 }).toBe(40)
+
+        // 手机端再连加到 Lv3（exp 40→100）→ 待播条出现 → 手机点"全部播放" → PC 演出
+        const timesToLv3 = Math.ceil((100 - 40) / rulePlus.score)
+        for (let i = 0; i < timesToLv3; i++) {
+          await request.post(API + '/pet/evaluate', {
+            headers: authHeader(), data: { studentId: sid3, ruleId: rulePlus.id, defer: true }
+          })
+        }
+        await expect(phone.locator('.m-held-bar')).toBeVisible({ timeout: 12000 })
+        await phone.locator('.held-play').click()
+        await expect(page.locator('.evo-overlay')).toBeVisible({ timeout: 8000 })
+        await expect(page.locator('.evo-sub')).toContainText('Lv.3')
+        await page.locator('.evo-overlay').click({ position: { x: 40, y: 40 } })
+        await expect.poll(async () => {
+          const d = (await (await request.get(API + '/pet/pets', { headers: authHeader() })).json()).data
+          return d.pendingEvolves.some(u => u.studentId === sid3)
+        }, { timeout: 10000 }).toBeFalsy()
+        await phone.close()
+
+        // --- 登录卡：独立 context（清 token 不影响主 context 的 PC 连接） ---
+        const ctx2 = await page.context().browser().newContext({ viewport: { width: 390, height: 844 } })
+        const p2 = await ctx2.newPage()
+        await p2.goto('/m')
+        await expect(p2.locator('.m-login')).toBeVisible()
+        await p2.locator('.m-input').nth(0).fill('admin')
+        await p2.locator('.m-input').nth(1).fill(PWD)
+        await p2.locator('.m-btn-primary').click()
+        await expect(p2.locator('.m-grid')).toBeVisible({ timeout: 10000 })
+        await ctx2.close()
+      } finally {
+        // 清理：遥控生删除（宠物/流水随学生级联），保证步骤 13 统计回到 40 人
+        await request.delete(API + '/roster/student/' + sid3, { headers: authHeader() })
+      }
     })
 
     // ============ 13. 花名册删除学生（验证需求 + 清理测试生） ============

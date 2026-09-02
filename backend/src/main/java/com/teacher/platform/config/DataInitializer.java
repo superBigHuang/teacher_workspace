@@ -206,16 +206,33 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     /**
-     * 内置宠物皮肤：云小龙（user_id=NULL 全局共享，所有账号可见可领养）。
+     * 内置宠物皮肤（user_id=NULL 全局共享，所有账号可见可领养）。
      * 自定义皮肤由老师在「自创宠物」弹窗上传，按账号隔离。
+     * 按 skin_key 逐条幂等：已存在跳过，版本迭代追加新皮肤时老库重启即可补播。
+     * 图片随前端发布：frontend/public/pets/{key}_{egg|1..5}.webp build 进 dist。
      */
     private void seedBuiltinSkin() {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM pet_skin WHERE skin_key='dragon'", Integer.class);
-        if (n != null && n > 0) return;
-        jdbc.update("INSERT INTO pet_skin(user_id,skin_key,name,built_in,fx_theme," +
-                        "img_egg,img_1,img_2,img_3,img_4,img_5) VALUES(NULL,'dragon','云小龙',1,'gold',?,?,?,?,?,?)",
-                "/pets/dragon_egg.webp", "/pets/dragon_1.webp", "/pets/dragon_2.webp",
-                "/pets/dragon_3.webp", "/pets/dragon_4.webp", "/pets/dragon_5.webp");
+        // 内置皮肤清单：skin_key / 中文名 / 进化特效主题（与前端 FX_THEMES 对应）
+        record BuiltinSkin(String key, String name, String fxTheme) {}
+        List<BuiltinSkin> skins = List.of(
+                new BuiltinSkin("dragon", "云小龙", "gold"),
+                new BuiltinSkin("firedragon", "烈焰神龙", "fire"),
+                new BuiltinSkin("catdragon", "灵翼喵龙", "ice"),
+                new BuiltinSkin("candy", "糖果天使龙", "candy"),
+                new BuiltinSkin("forest", "青叶森龙", "forest"),
+                new BuiltinSkin("moonrabbit", "月华仙兔", "thunder"));
+        for (BuiltinSkin s : skins) {
+            Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM pet_skin WHERE skin_key=?",
+                    Integer.class, s.key());
+            if (n != null && n > 0) continue;
+            jdbc.update("INSERT INTO pet_skin(user_id,skin_key,name,built_in,fx_theme," +
+                            "img_egg,img_1,img_2,img_3,img_4,img_5) VALUES(NULL,?,? ,1,?, ?,?,?,?,?,?)",
+                    s.key(), s.name(), s.fxTheme(),
+                    "/pets/" + s.key() + "_egg.webp",
+                    "/pets/" + s.key() + "_1.webp", "/pets/" + s.key() + "_2.webp",
+                    "/pets/" + s.key() + "_3.webp", "/pets/" + s.key() + "_4.webp",
+                    "/pets/" + s.key() + "_5.webp");
+        }
     }
 
     // ---------- 默认 admin 账号 ----------
