@@ -423,12 +423,37 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect.poll(async () => await contactRows.count(), { timeout: 10000 }).toBe(1)
       await page.getByPlaceholder('搜索学生/家长/电话').fill('')
       await expect.poll(async () => await contactRows.count(), { timeout: 10000 }).toBeGreaterThan(35)
+      // 无用入口已移除：工具栏无「沟通记录/清空记录」按钮，页内不再平铺全量沟通记录表
+      await expect(page.getByRole('button', { name: '沟通记录' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: '清空记录' })).toHaveCount(0)
+      await expect(page.locator('.el-card', { hasText: '家校沟通记录' })).toHaveCount(0)
+
       await page.locator('.el-card', { hasText: '家长通讯录' }).getByRole('button', { name: /沟通/ }).first().click()
       const dlg = page.locator('.el-dialog', { hasText: '家校沟通管理' })
       await expect(dlg).toBeVisible()
       await expect(dlg.getByText('添加沟通记录')).toBeVisible()
       await page.keyboard.press('Escape')
       await expect(dlg).toBeHidden()
+
+      // 编辑家长联系方式：改住址→保存→表格生效→原值复原（不污染真实学生）
+      const listCard = page.locator('.el-card', { hasText: '家长通讯录' })
+      const firstRow = listCard.locator('.el-table__row').first()
+      const origAddr = (await firstRow.locator('td').nth(4).innerText()).trim()
+      await firstRow.getByRole('button', { name: /编辑/ }).click()
+      const eDlg = page.locator('.el-dialog', { hasText: '编辑家长联系方式' })
+      await expect(eDlg).toBeVisible()
+      await eDlg.getByPlaceholder('家庭住址').fill('E2E测试住址')
+      await eDlg.getByRole('button', { name: '保存' }).click()
+      await expect(eDlg).toBeHidden({ timeout: 8000 })
+      await expect.poll(async () =>
+        (await listCard.locator('.el-table__row').first().innerText()).includes('E2E测试住址'),
+        { timeout: 8000 }).toBe(true)
+      // 复原原住址
+      await listCard.locator('.el-table__row').first().getByRole('button', { name: /编辑/ }).click()
+      await expect(eDlg).toBeVisible()
+      await eDlg.getByPlaceholder('家庭住址').fill(origAddr)
+      await eDlg.getByRole('button', { name: '保存' }).click()
+      await expect(eDlg).toBeHidden({ timeout: 8000 })
     })
 
     // ============ 7. 课程表 ============
