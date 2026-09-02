@@ -48,3 +48,7 @@ Thumbs.db
 # ===== 本地环境覆盖配置（按需）=====
 application-local.yml
 application-local.properties
+
+# ===== 临时密钥 / 信息文件（严禁入库）=====
+info.txt
+secret*.txt
