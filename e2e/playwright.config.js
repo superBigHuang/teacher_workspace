@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test'
 // Playwright E2E 配置：前端 5173，无头 chromium，失败自动截图 + trace
 export default defineConfig({
   testDir: './tests',
-  timeout: 90000,
+  timeout: 180000, // 全站走查为单一大测试（14+ step、正常 ~80s），余量放宽到 3 分钟，防外部接口慢导致级联超时
   expect: { timeout: 15000 },
   use: {
     baseURL: 'http://localhost:5173',

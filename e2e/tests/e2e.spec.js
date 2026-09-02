@@ -150,7 +150,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       }
       const dispDefault = JSON.stringify({
         simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
-        namePos: 'v-left', print: { flip: 0, mono: 1, withUnseated: 1 }
+        namePos: 'h-bottom', print: { flip: 0, mono: 1, withUnseated: 1 }
       })
       await request.put(API + '/settings/seat-display', {
         headers: authHeader(), data: { v: dispDefault }
@@ -1316,11 +1316,18 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         await expect(unseatWrap.locator('button')).toHaveCount(0)
       }
 
-      // 14.4 名字位置：切横排贴底 → seat.h-bottom；切回竖排贴左（简易模式下仍自动 h-center）
+      // 14.4 名字位置（完整模式三档可切；简易模式强制 h-center）：先关简易模式，默认 h-bottom → v-left → h-center → h-bottom，再重开简易模式（14.5 刷新断言依赖简易模式仍开）
+      await cfgDlg.locator('.el-switch').first().click() // 关简易模式
+      await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 8000 }).toBeGreaterThan(0)
+      await expect(page.locator('.seat.h-bottom').first()).toBeVisible({ timeout: 5000 }) // 偏好默认贴底
+      await cfgDlg.locator('.el-radio-button', { hasText: '竖排贴左' }).click()
+      await expect(page.locator('.seat.v-left').first()).toBeVisible({ timeout: 5000 })
+      await cfgDlg.locator('.el-radio-button', { hasText: '横排居中' }).click()
+      await expect(page.locator('.seat.h-center').first()).toBeVisible({ timeout: 5000 })
       await cfgDlg.locator('.el-radio-button', { hasText: '横排贴底' }).click()
       await expect(page.locator('.seat.h-bottom').first()).toBeVisible({ timeout: 5000 })
-      await cfgDlg.locator('.el-radio-button', { hasText: '竖排贴左' }).click()
-      await expect(page.locator('.seat.h-center').first()).toBeVisible({ timeout: 5000 })
+      await cfgDlg.locator('.el-switch').first().click() // 重开简易模式
+      await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 8000 }).toBe(0)
       await cfgDlg.locator('.el-dialog__close').last().click()
       await expect(cfgDlg).toBeHidden()
 

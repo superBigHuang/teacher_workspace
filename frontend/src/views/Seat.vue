@@ -548,12 +548,12 @@ const SKIN_STAGES = [
 ]
 
 // ==================== 显示偏好（setting 键 seat_display，账号级持久化） ====================
-/** 偏好默认值 = 现状界面（宠物模式、竖排名、性别色/标签/角标全开；打印黑白省墨默认开） */
+/** 偏好默认值 = 现状界面（宠物模式、名字横排贴底、性别色/标签/角标/奖牌全开；打印黑白省墨默认开） */
 function dispDefault() {
   return {
     simple: 0,
     fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
-    namePos: 'v-left', // v-left 竖排贴左 | h-center 横排居中 | h-bottom 横排贴底
+    namePos: 'h-bottom', // v-left 竖排贴左 | h-center 横排居中 | h-bottom 横排贴底（默认：宠物在上、姓名贴底）
     print: { flip: 0, mono: 1, withUnseated: 1 }
   }
 }
@@ -567,9 +567,8 @@ const fieldChecks = computed({
   get: () => FIELD_KEYS.filter(k => disp.fields[k]),
   set: arr => FIELD_KEYS.forEach(k => { disp.fields[k] = arr.includes(k) ? 1 : 0 })
 })
-/** 生效名字位置：简易模式且用户未手动改过（仍默认 v-left）时自动横排居中；纯视图层，不写回偏好 */
-const effNamePos = computed(() =>
-  disp.simple && disp.namePos === 'v-left' ? 'h-center' : disp.namePos)
+/** 生效名字位置：简易模式无宠物块，强制横排居中（贴底会在卡片上半留大片空白、贴左竖排无图相配）；纯视图层，不写回偏好 */
+const effNamePos = computed(() => disp.simple ? 'h-center' : disp.namePos)
 /** 打印三个开关：0/1 ↔ boolean */
 const flipModel = computed({ get: () => !!disp.print.flip, set: v => { disp.print.flip = v ? 1 : 0 } })
 const monoModel = computed({ get: () => !!disp.print.mono, set: v => { disp.print.mono = v ? 1 : 0 } })
@@ -852,14 +851,14 @@ function onSeatUp(e) {
 .seat.h-center .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
 .seat.h-center .seat-pet { order: 2; }
 .seat.h-center .seat-pet-img { width: 92px; height: 92px; }
-/* h-bottom 横排贴底：宠物在上，姓名/学号贴卡片底部 */
+/* h-bottom 横排贴底：宠物块 flex:1 占满名字上方空间并垂直居中（不贴顶），姓名/学号贴卡片底部 */
 .seat.h-bottom { flex-direction: column; }
-.seat.h-bottom .seat-pet { order: 0; }
+.seat.h-bottom .seat-pet { order: 0; flex: 1; width: 100%; min-height: 0; }
 .seat.h-bottom .seat-name,
 .seat.h-bottom .seat-stuno { position: static; writing-mode: horizontal-tb; order: 1; }
-.seat.h-bottom .seat-name { font-size: 14px; line-height: 1.25; margin-top: auto; }
+.seat.h-bottom .seat-name { font-size: 14px; line-height: 1.25; }
 .seat.h-bottom .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
-.seat.h-bottom .seat-pet-img { width: 100px; height: 100px; }
+.seat.h-bottom .seat-pet-img { width: 104px; height: 104px; }
 /* 关闭性别底色：统一白底灰边（座位格） */
 .seat.no-gender { background: #fff; border: 2px solid #e3e6f0; color: #5a5f6e; }
 .seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
