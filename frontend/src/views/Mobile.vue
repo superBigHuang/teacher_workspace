@@ -124,7 +124,8 @@ onUnmounted(() => teardown())
 /** 登录成功/已登录进入：初始化宠物数据 + SSE 遥控通道 + 轮询兜底 */
 function boot() {
   if (!P) {
-    P = usePets()
+    // 手机页不本地演破壳/进化（shows=false）：pending 进化仍攒待播清单，由手机指挥投影播放
+    P = usePets({ shows: false })
     p.value = P
   }
   startRemote()

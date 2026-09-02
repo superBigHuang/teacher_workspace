@@ -87,9 +87,14 @@
             <template v-if="petOf(s)?.petId && petOf(s).level >= 5">
               <i v-for="n in 3" :key="'sp'+n" class="wx-spark" :style="sparkStyle(n)"></i>
             </template>
+            <!-- 孵化中蛋：暖黄呼吸光晕 + 浮动（egg），点击左右摇晃（egg-wiggle）；蛋不挂 frozen/broken 特效 -->
             <img class="seat-pet-img"
-              :class="[{ alive: petOf(s)?.petId, frozen: petOf(s)?.frozen, broken: petOf(s)?.broken }, popClass(s.studentId)]"
+              :class="[{ alive: petOf(s)?.petId && petOf(s)?.hatched !== 0,
+                         egg: petOf(s)?.petId && petOf(s)?.hatched === 0,
+                         'egg-wiggle': eggWiggle.has(s.studentId),
+                         frozen: petOf(s)?.frozen, broken: petOf(s)?.broken }, popClass(s.studentId)]"
               :src="petImg(petOf(s))" alt="宠物">
+            <span v-if="petOf(s)?.petId && petOf(s)?.hatched === 0" class="egg-spark">✨</span>
             <span v-for="f in floatsOf(s.studentId)" :key="f.id" class="float-score"
               :class="f.good ? 'good' : 'bad'">{{ f.text }}
               <i v-for="(e, ei) in f.ems" :key="ei" class="float-em"
@@ -125,8 +130,13 @@
             <template v-if="p.petId && p.level >= 5">
               <i v-for="n in 3" :key="'sp'+n" class="wx-spark" :style="sparkStyle(n)"></i>
             </template>
-            <img class="pet-img" :class="[{ alive: p.petId, frozen: p.frozen, broken: p.broken }, popClass(p.studentId)]"
+            <!-- 孵化中蛋：暖黄呼吸光晕 + 浮动（egg），点击左右摇晃（egg-wiggle） -->
+            <img class="pet-img"
+              :class="[{ alive: p.petId && p.hatched !== 0, egg: p.petId && p.hatched === 0,
+                         'egg-wiggle': eggWiggle.has(p.studentId),
+                         frozen: p.frozen, broken: p.broken }, popClass(p.studentId)]"
               :src="petImg(p)" alt="宠物">
+            <span v-if="p.petId && p.hatched === 0" class="egg-spark">✨</span>
             <span v-for="f in floatsOf(p.studentId)" :key="f.id" class="float-score"
               :class="f.good ? 'good' : 'bad'">{{ f.text }}
               <i v-for="(e, ei) in f.ems" :key="ei" class="float-em"
@@ -135,9 +145,18 @@
           </div>
 
           <template v-if="p.petId">
-            <div class="pet-name">{{ p.petName }}<span class="lv-badge">Lv.{{ p.level }}</span></div>
-            <div class="exp-bar"><div class="exp-fill" :style="{ width: expPct(p) + '%' }"></div></div>
-            <div class="exp-text">{{ p.level >= 5 ? '✨ 已满级，可毕业！' : `成长值 ${p.exp} / ${p.expTarget}` }}</div>
+            <div class="pet-name">{{ p.petName }}
+              <span v-if="p.hatched === 0" class="lv-badge egg-badge">🥚 孵化中</span>
+              <span v-else class="lv-badge">Lv.{{ p.level }}</span>
+            </div>
+            <!-- 蛋态：隐藏等级与进度条，只留孵化提示（成长值照常累计，破壳时结算） -->
+            <template v-if="p.hatched === 0">
+              <div class="exp-text egg-tip">明天破壳，成长值照常累计～</div>
+            </template>
+            <template v-else>
+              <div class="exp-bar"><div class="exp-fill" :style="{ width: expPct(p) + '%' }"></div></div>
+              <div class="exp-text">{{ p.level >= 5 ? '✨ 已满级，可毕业！' : `成长值 ${p.exp} / ${p.expTarget}` }}</div>
+            </template>
           </template>
           <template v-else>
             <div class="pet-name egg-name">神秘精灵蛋</div>
@@ -170,7 +189,7 @@
         </div>
       </div>
       <div class="adopt-body">
-        <p class="adopt-tip">一颗温热的精灵蛋正在微微发光……<br>给Ta起个名字，一起成长吧！</p>
+        <p class="adopt-tip">一颗温热的精灵蛋正在微微发光……<br>🥚 领养后是一颗神秘蛋，<b>明天</b>就会破壳出生哦！<br>给Ta起个名字，一起成长吧！</p>
         <el-input v-model="adoptName" maxlength="12" placeholder="给宠物起个中文名，如：云小龙" />
       </div>
       <template #footer>
@@ -179,27 +198,38 @@
       </template>
     </el-dialog>
 
-    <!-- 宠物详情弹窗 -->
-    <el-dialog v-model="detailDlg" :title="`🐉 ${detailStudent?.petName || '宠物详情'}`" width="460px" align-center>
+    <!-- 宠物详情弹窗（蛋态：显示蛋与孵化提示，隐藏等级/进度，加分照常） -->
+    <el-dialog v-model="detailDlg"
+      :title="detailStudent?.hatched === 0 ? `🥚 ${detailStudent?.petName || '神秘蛋'}（孵化中）` : `🐉 ${detailStudent?.petName || '宠物详情'}`"
+      width="460px" align-center>
       <div v-if="detailStudent" class="detail-body">
         <div class="detail-head">
-          <img class="detail-img" :src="petImg(detailStudent)" alt="宠物">
+          <img class="detail-img" :class="{ egg: detailStudent.hatched === 0 }" :src="petImg(detailStudent)" alt="宠物">
           <div class="detail-info">
             <div class="detail-name">{{ detailStudent.petName }}
-              <span class="lv-badge big">Lv.{{ detailStudent.level }}</span>
+              <span v-if="detailStudent.hatched === 0" class="lv-badge big egg-badge">🥚 孵化中</span>
+              <span v-else class="lv-badge big">Lv.{{ detailStudent.level }}</span>
             </div>
-            <div class="detail-line">🎓 毕业徽章：<b>{{ detailStudent.graduatedCount || 0 }}</b> 枚
-              <span v-for="n in detailStudent.graduatedCount" :key="n" class="badge-medal">🎓</span>
+            <!-- 蛋态：孵化提示代替等级/徽章/成长值（破壳后按累计成长值一次性结算） -->
+            <div v-if="detailStudent.hatched === 0" class="detail-line egg-tip">
+              🥚 蛋蛋正在吸收能量，<b>明天</b>就会破壳出生！<br>这期间加分照常累计哦～
             </div>
-            <div class="detail-line">⭐ 累计成长值：<b>{{ detailStudent.exp }}</b>
-              <span v-if="detailStudent.level < 5">（距 Lv.{{ detailStudent.level + 1 }} 还需 {{ detailStudent.expTarget - detailStudent.exp }}）</span>
-              <span v-else>已满级</span>
-            </div>
+            <template v-else>
+              <div class="detail-line">🎓 毕业徽章：<b>{{ detailStudent.graduatedCount || 0 }}</b> 枚
+                <span v-for="n in detailStudent.graduatedCount" :key="n" class="badge-medal">🎓</span>
+              </div>
+              <div class="detail-line">⭐ 累计成长值：<b>{{ detailStudent.exp }}</b>
+                <span v-if="detailStudent.level < 5">（距 Lv.{{ detailStudent.level + 1 }} 还需 {{ detailStudent.expTarget - detailStudent.exp }}）</span>
+                <span v-else>已满级</span>
+              </div>
+            </template>
           </div>
         </div>
 
-        <!-- 成长进度条（座位格上不显示等级/进度，统一收进详情） -->
-        <div class="detail-exp"><div class="detail-exp-fill" :style="{ width: expPct(detailStudent) + '%' }"></div></div>
+        <!-- 成长进度条（蛋态隐藏；座位格上不显示等级/进度，统一收进详情） -->
+        <div v-if="detailStudent.hatched !== 0" class="detail-exp">
+          <div class="detail-exp-fill" :style="{ width: expPct(detailStudent) + '%' }"></div>
+        </div>
 
         <div class="log-title">📖 最近成长流水</div>
         <div class="log-list">
@@ -463,7 +493,7 @@ async function onDrop(e, target) {
 
 // ==================== 宠物园（逻辑复用 usePets） ====================
 const {
-  pets, skins, selected, batchMode, floats, popKind,
+  pets, skins, selected, batchMode, floats, popKind, eggWiggle,
   adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
   adoptName, adoptSkin, detailStudent, detailLogs, evalBatch, evalCat,
   gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
@@ -577,6 +607,40 @@ function onSeatUp(e) {
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
 .seat-pet-img.frozen { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 6px rgba(120,190,255,.8)); }
 .seat-pet-img.broken { filter: grayscale(.9) contrast(.92); }
+/* 孵化中蛋：暖黄呼吸光晕 + 轻轻上下浮动（座位格） */
+.seat-pet-img.egg {
+  animation: egg-float 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px rgba(255, 214, 130, .9)) drop-shadow(0 0 20px rgba(255, 190, 90, .5));
+}
+@keyframes egg-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+/* 点击蛋：左右摇晃 0.5s（覆盖浮动动画，结束后自动恢复） */
+.seat-pet-img.egg-wiggle { animation: egg-click-wiggle .5s ease-in-out; }
+@keyframes egg-click-wiggle {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-14deg); }
+  40% { transform: rotate(12deg); }
+  60% { transform: rotate(-9deg); }
+  80% { transform: rotate(6deg); }
+}
+/* 蛋右上角小 ✨（明暗闪烁） */
+.egg-spark {
+  position: absolute; top: 4px; right: 10px; font-size: 15px; z-index: 2;
+  pointer-events: none; animation: egg-spark-twinkle 1.6s ease-in-out infinite;
+}
+@keyframes egg-spark-twinkle {
+  0%, 100% { opacity: .3; transform: scale(.8) rotate(-8deg); }
+  50% { opacity: 1; transform: scale(1.2) rotate(8deg); }
+}
+/* 「孵化中」徽章与提示文案 */
+.lv-badge.egg-badge { background: linear-gradient(135deg, #ffe3a3, #ffc879); color: #8a5a34; }
+.egg-tip { color: #c08a4a; font-weight: 700; }
+.detail-img.egg {
+  animation: egg-float 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px rgba(255, 214, 130, .9)) drop-shadow(0 0 28px rgba(255, 190, 90, .45));
+}
 /* Lv5 金描边（.wx-aura.lv5 与 img 为兄弟节点） */
 .wx-aura.lv5 ~ img { filter: drop-shadow(0 0 6px rgba(255,210,120,.95)) drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-flag { position: absolute; top: -6px; right: 16px; font-size: 16px; z-index: 2; }
@@ -615,6 +679,12 @@ function onSeatUp(e) {
 .pet-card.frozen { background: linear-gradient(150deg, #eaf6ff, #d4ebff); border-color: #bfe0ff; }
 .pet-card.frozen .pet-img { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 8px rgba(120,190,255,.8)); }
 .pet-card.broken .pet-img { filter: grayscale(.9) contrast(.92); }
+/* 蛋态暖光（高特异性压过 :not(.alive)/frozen/broken 的 img filter；蛋本身不挂这些状态） */
+.pet-card .pet-img.egg {
+  animation: egg-float 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(255, 214, 130, .9)) drop-shadow(0 0 22px rgba(255, 190, 90, .5));
+}
+.pet-card .pet-img.egg-wiggle { animation: egg-click-wiggle .5s ease-in-out; }
 .pet-card.broken::after {
   content: ''; position: absolute; inset: 8px; border-radius: 16px; pointer-events: none;
   background: repeating-linear-gradient(45deg, transparent 0 14px, rgba(120,120,140,.12) 14px 15px);

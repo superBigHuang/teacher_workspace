@@ -36,6 +36,10 @@ public class PetController extends BaseController {
     @Value("${app.upload-dir:./uploads}")
     private String uploadDir;
 
+    /** 开发/E2E 开关：true 时 /pet/hatch-seen 允许 force 立即破壳（免跨天等待）；生产恒为 false */
+    @Value("${app.pet.dev-hatch:false}")
+    private boolean devHatch;
+
     public PetController(JdbcTemplate jdbc, PetService petService, TermStatsService termStats, RemoteHub remoteHub) {
         this.jdbc = jdbc;
         this.petService = petService;
@@ -50,16 +54,16 @@ public class PetController extends BaseController {
     // ---------- 宠物 ----------
 
     /**
-     * 全班宠物状态：{pets: 学生+宠物（未领养为 null，含等级/成长值/皮肤/当日状态标记）,
-     * pendingEvolves: 跨页面升级待演列表}。
+     * 全班宠物状态：{pets: 学生+宠物（未领养为 null，含等级/成长值/皮肤/hatched/当日状态标记）,
+     * pendingEvolves: 跨页面升级待演列表, pendingHatches: 到期待破壳的蛋列表}。
      */
     @GetMapping("/pets")
     public Result<Map<String, Object>> pets() {
         Long uid = uid();
         List<Map<String, Object>> list = jdbc.queryForList(
                 "SELECT s.id studentId, s.name, s.gender, s.stu_no stuNo, " +
-                        "p.id petId, p.pet_key skinKey, p.pet_name petName, p.level, p.exp, p.graduated_count graduatedCount, " +
-                        "COALESCE(sk.fx_theme,'gold') fxTheme " +
+                        "p.id petId, p.pet_key skinKey, p.pet_name petName, p.level, p.exp, p.hatched, " +
+                        "p.graduated_count graduatedCount, COALESCE(sk.fx_theme,'gold') fxTheme " +
                         "FROM student s LEFT JOIN pet p ON p.student_id=s.id AND p.user_id=s.user_id " +
                         "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
                         "WHERE s.user_id=? AND s.class_id=? ORDER BY s.stu_no, s.id", uid, classId());
@@ -68,10 +72,12 @@ public class PetController extends BaseController {
             Long sid = ((Number) row.get("studentId")).longValue();
             int level = row.get("level") == null ? 0 : ((Number) row.get("level")).intValue();
             int exp = row.get("exp") == null ? 0 : ((Number) row.get("exp")).intValue();
+            // 孵化中的蛋（hatched=0）不挂任何状态特效：蛋不会头晕/冻结/受伤/成今日之星
+            boolean hatched = row.get("hatched") != null && ((Number) row.get("hatched")).intValue() == 1;
             int[] range = PetService.levelRange(Math.max(1, level));
             row.put("expStart", range[0]);
             row.put("expTarget", range[1]);
-            Set<String> f = flags.getOrDefault(sid, Set.of());
+            Set<String> f = hatched ? flags.getOrDefault(sid, Set.of()) : Set.of();
             row.put("dizzy", f.contains("dizzy"));
             row.put("frozen", f.contains("frozen"));
             row.put("broken", f.contains("broken"));
@@ -84,7 +90,22 @@ public class PetController extends BaseController {
                         "FROM pet p JOIN student s ON s.id=p.student_id AND s.user_id=p.user_id " +
                         "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
                         "WHERE p.user_id=? AND p.evolve_pending=1 AND s.class_id=?", uid, classId());
-        return Result.ok(Map.of("pets", list, "pendingEvolves", pending));
+        // 到期待破壳的蛋（hatched=0 且已跨自然日）；toLevel=按蛋期间累计 exp 结算的等级（攒够分破壳即连升）
+        List<Map<String, Object>> hatchRows = jdbc.queryForList(
+                "SELECT p.student_id studentId, s.name, p.pet_name petName, p.exp, " +
+                        "p.pet_key skinKey, COALESCE(sk.fx_theme,'gold') fxTheme " +
+                        "FROM pet p JOIN student s ON s.id=p.student_id AND s.user_id=p.user_id " +
+                        "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
+                        "WHERE p.user_id=? AND p.hatched=0 AND DATE(p.adopted_at)<CURDATE() AND s.class_id=?",
+                uid, classId());
+        List<Map<String, Object>> pendingHatches = new ArrayList<>();
+        for (Map<String, Object> h : hatchRows) {
+            Map<String, Object> m = new LinkedHashMap<>(h);
+            m.put("toLevel", PetService.levelOf(((Number) h.get("exp")).intValue()));
+            m.remove("exp");
+            pendingHatches.add(m);
+        }
+        return Result.ok(Map.of("pets", list, "pendingEvolves", pending, "pendingHatches", pendingHatches));
     }
 
     /** 清除某只宠物的待演标记（进化演出播放完一幕后调用） */
@@ -93,6 +114,17 @@ public class PetController extends BaseController {
         jdbc.update("UPDATE pet SET evolve_pending=0 WHERE user_id=? AND student_id=?",
                 uid(), asLong(body.get("studentId")));
         return Result.ok();
+    }
+
+    /**
+     * 破壳演出播完后回调：蛋到期（跨自然日，SQL WHERE 守卫）才置 hatched=1 并按累计 exp 结算等级。
+     * force 仅在开发/E2E 开关 app.pet.dev-hatch=true 时生效（免跨天等待），生产环境忽略。
+     */
+    @PostMapping("/hatch-seen")
+    public Result<Map<String, Object>> hatchSeen(@RequestBody Map<String, Object> body) {
+        boolean force = Boolean.TRUE.equals(body.get("force")) && devHatch;
+        boolean changed = petService.hatch(uid(), asLong(body.get("studentId")), force);
+        return Result.ok(Map.of("changed", changed));
     }
 
     /** 重置/移除宠物（删除宠物及其流水/徽章/兑换记录；误领养或转学生清理用） */

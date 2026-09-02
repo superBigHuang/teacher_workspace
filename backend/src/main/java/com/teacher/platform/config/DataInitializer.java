@@ -62,6 +62,9 @@ public class DataInitializer implements CommandLineRunner {
         // 宠物 v1.1：跨页面升级待演标记
         ensureColumn("pet", "evolve_pending",
                 "evolve_pending TINYINT NOT NULL DEFAULT 0 COMMENT '跨页面升级待演标记'");
+        // 宠物 v1.2：孵蛋破壳（0=孵化中蛋，1=已破壳；DEFAULT 1 保证存量宠物全部视为已破壳，不回退成蛋）
+        ensureColumn("pet", "hatched",
+                "hatched TINYINT NOT NULL DEFAULT 1 COMMENT '是否已破壳：0=孵化中蛋，1=已出生'");
 
         // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
         rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");

@@ -28,6 +28,9 @@ app:
     expire-hours: 72
   # 本地上传目录（自定义宠物皮肤图片）；经 /uploads/** 静态映射访问，部署时可用 UPLOAD_DIR 覆盖
   upload-dir: ${UPLOAD_DIR:./uploads}
+  pet:
+    # 开发/E2E 开关：true 时 /pet/hatch-seen 允许 force 立即破壳（免等跨天，自动化测试用）；生产必须 false 或不配
+    dev-hatch: ${PET_DEV_HATCH:false}
 
 ai:
   defaults:

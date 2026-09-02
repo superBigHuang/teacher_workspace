@@ -330,7 +330,7 @@ CREATE TABLE IF NOT EXISTS student_achievement (
   KEY idx_sa_student (user_id, student_id)
 );
 
--- 班级宠物园：学生宠物（per-user；一个学生一只，形态由 level 推导：0=蛋 1~5=五阶）
+-- 班级宠物园：学生宠物（per-user；一个学生一只，形态由 level 推导 1~5；hatched=0 为孵化中蛋）
 CREATE TABLE IF NOT EXISTS pet (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL DEFAULT 1,
@@ -342,6 +342,7 @@ CREATE TABLE IF NOT EXISTS pet (
   adopted_at DATETIME COMMENT '领养时间',
   graduated_count INT NOT NULL DEFAULT 0 COMMENT '毕业次数（荣誉榜徽章数）',
   evolve_pending TINYINT NOT NULL DEFAULT 0 COMMENT '跨页面/自动联动升级待演标记：1=下次入座次表页补播进化演出',
+  hatched TINYINT NOT NULL DEFAULT 1 COMMENT '是否已破壳：0=孵化中蛋（领养后到次日破壳前），1=已出生；DEFAULT 1 保证存量宠物不回退成蛋',
   UNIQUE KEY uk_pet_student (user_id, student_id),
   KEY idx_pet_user (user_id)
 );

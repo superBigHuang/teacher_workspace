@@ -21,11 +21,16 @@
       <div v-if="phase === 4" class="evo-flash" :class="{ on: flashOn }"></div>
       <!-- 阶段字幕 -->
       <div v-if="caption" class="evo-caption">{{ caption }}</div>
-      <!-- 揭晓文案 -->
+      <!-- 揭晓文案（破壳 / 进化 两种） -->
       <div v-if="phase >= 5" class="evo-success">
-        <div class="evo-title">✨ 进 化 成 功 ✨</div>
+        <div class="evo-title">{{ kind === 'hatch' ? '🥚 破 壳 啦 🥚' : '✨ 进 化 成 功 ✨' }}</div>
         <div class="evo-sub">
-          <b>{{ scene.name }}</b> 的 {{ scene.petName }} 从 Lv.{{ scene.fromLevel }} 进化为 Lv.{{ scene.toLevel }}！
+          <template v-if="kind === 'hatch'">
+            <b>{{ scene.name }}</b> 的 {{ scene.petName }} 破壳诞生啦！
+          </template>
+          <template v-else>
+            <b>{{ scene.name }}</b> 的 {{ scene.petName }} 从 Lv.{{ scene.fromLevel }} 进化为 Lv.{{ scene.toLevel }}！
+          </template>
         </div>
       </div>
       <div class="evo-skip">点击任意处跳过 ≫</div>
@@ -39,7 +44,7 @@ import confetti from 'canvas-confetti'
 import { FX_THEMES } from '../composables/usePets'
 
 const props = defineProps({
-  /** 一幕升级事件 {studentId, name, petName, fromLevel, toLevel, skinKey, fxTheme, fromImg, toImg} */
+  /** 一幕演出事件 {kind:'hatch'|'evolve', studentId, name, petName, fromLevel, toLevel, skinKey, fxTheme, fromImg, toImg} */
   scene: { type: Object, default: null }
 })
 const emit = defineEmits(['done'])
@@ -61,6 +66,10 @@ let waiters = []
 let skipped = false
 
 const theme = computed(() => FX_THEMES[props.scene?.fxTheme] || FX_THEMES.gold)
+/** 演出种类：hatch=破壳（蛋→Lv1），evolve=进化（默认，现有分镜） */
+const kind = computed(() => props.scene?.kind === 'hatch' ? 'hatch' : 'evolve')
+/** 破壳粒子固定 ✨💫🥚；进化用主题粒子 */
+const HATCH_EMOJIS = ['✨', '💫', '🥚']
 
 /** 聚光灯遮罩：在目标座位中心挖透明圆洞 */
 const maskStyle = computed(() => {
@@ -77,12 +86,22 @@ const beamStyle = computed(() => ({
 const auraBg = computed(() =>
   `conic-gradient(from 0deg, transparent 0deg, ${theme.value.beam}cc 60deg, transparent 130deg, transparent 220deg, ${theme.value.beam}88 280deg, transparent 340deg)`)
 
-const caption = computed(() => ({
-  1: '⚠ 进化能量汇聚中……',
-  2: '🚀 宠物飞向进化之光！',
-  3: '⚡ 能量蓄力中……',
-  4: '💥 进 化 ！'
-}[phase.value] || ''))
+const caption = computed(() => {
+  if (kind.value === 'hatch') {
+    return {
+      1: '🥚 咦？座位上有一颗蛋在发光……',
+      2: '✨ 神秘的蛋飘了起来！',
+      3: '💫 蛋在剧烈摇晃，快要破壳了……',
+      4: '💥 破 壳 ！'
+    }[phase.value] || ''
+  }
+  return {
+    1: '⚠ 进化能量汇聚中……',
+    2: '🚀 宠物飞向进化之光！',
+    3: '⚡ 能量蓄力中……',
+    4: '💥 进 化 ！'
+  }[phase.value] || ''
+})
 
 /** 可跳过的等待：跳过点击后所有等待立即放行 */
 function wait(ms) {
@@ -144,16 +163,17 @@ watch(() => props.scene, async (s) => {
   phase.value = 2
   await wait(950); if (skipped) return finish()
 
-  // —— 阶段 3：蓄力（1s）：抖动加剧 + 光环加速 + 光柱 + 粒子汇聚 ——
+  // —— 阶段 3：蓄力（1s）：光环加速 + 光柱 + 粒子汇聚；破壳为蛋左右狂摇（±15°），进化为原抖动 ——
   phase.value = 3
-  imgClass.value = 'charging'
+  imgClass.value = kind.value === 'hatch' ? 'hatching' : 'charging'
   imgStyle.value = {}
+  const emojis = kind.value === 'hatch' ? HATCH_EMOJIS : theme.value.particles
   const pts = []
   for (let i = 0; i < 14; i++) {
     const ang = (Math.PI * 2 * i) / 14 + Math.random() * 0.3
     const dist = 230 + Math.random() * 130
     pts.push({
-      emoji: theme.value.particles[i % theme.value.particles.length],
+      emoji: emojis[i % emojis.length],
       dx: Math.round(-Math.cos(ang) * dist),
       dy: Math.round(-Math.sin(ang) * dist),
       delay: Math.round(Math.random() * 220)
@@ -248,6 +268,8 @@ onBeforeUnmount(finish)
 }
 .evo-fly-img.flying { transition: transform .9s cubic-bezier(.45, -.15, .35, 1.15); }
 .evo-fly-img.charging { animation: evo-shake .11s linear infinite; }
+/* 破壳蓄力：蛋左右剧烈摇晃（rotate ±15° 加速抖动） */
+.evo-fly-img.hatching { animation: egg-hatch-shake .16s linear infinite; transform-origin: 50% 85%; }
 .evo-fly-img.revealed { animation: evo-pop .6s cubic-bezier(.2, 1.7, .4, 1) forwards; }
 .evo-fly-img.falling { transition: opacity .9s ease-in, transform .9s ease-in; opacity: 0; transform: scale(.8); }
 .evo-pt {
@@ -286,6 +308,10 @@ onBeforeUnmount(finish)
 @keyframes evo-shake {
   0%, 100% { transform: translateX(0) rotate(-3deg) scale(1.03); }
   50% { transform: translateX(5px) rotate(3deg) scale(1.06); }
+}
+@keyframes egg-hatch-shake {
+  0%, 100% { transform: rotate(-15deg) scale(1.04); }
+  50% { transform: rotate(15deg) scale(1.04); }
 }
 @keyframes evo-pt-in {
   from { transform: translate(var(--dx), var(--dy)) scale(.3); opacity: 0; }

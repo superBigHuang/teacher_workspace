@@ -741,26 +741,59 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         return list.find(p => p.studentId === testStudentId)
       }
 
-      // ① 领养 → UI 座次表页座位上显示 Lv1 形态（dragon_1；若未排座则在下方宠物卡区）
+      // ① 领养：当天为「孵化中蛋」——蛋图/暖光/✨、点击只提示不弹窗、hatched=0、
+      //    未跨天 hatch-seen 守卫生效、蛋中加分只累计不进化；force 破壳（dev 开关模拟次日）后显 Lv1
       let r = await apiPost('/pet/adopt', { studentId: testStudentId, petKey: 'dragon', petName: 'E2E小龙' })
       expect(r.code).toBe(200)
       let me = await petOf()
       expect(me.petId).toBeTruthy()
       expect(me.level).toBe(1)
-      await page.goto('/seat')
-      const myCard = page.locator('.seat, .pet-card', { hasText: 'E2E测试生' })
-      await expect.poll(async () => await myCard.count(), { timeout: 15000 }).toBe(1)
-      await expect(myCard.locator('img[src*="dragon_1.webp"]')).toBeVisible()
+      expect(me.hatched).toBe(0)
 
-      // 评价项：+3「平时测验满分」、+5「拾金不昧(贵重)」
+      // 评价项：+3「平时测验满分」、+5「拾金不昧(贵重)」（蛋态/破壳后加分共用）
       const rules = (await apiGet('/pet/rules')).data
       const rule3 = rules.find(x => x.score === 3)
       const rule5 = rules.find(x => x.score === 5)
       expect(rule3).toBeTruthy()
       expect(rule5).toBeTruthy()
 
-      // ② 加分至 exp≥40 → 自动升 Lv2（+5 共 8 次=40），UI 形态变 dragon_2
-      for (let i = 0; i < 8; i++) {
+      await page.goto('/seat')
+      const myCard = page.locator('.seat, .pet-card', { hasText: 'E2E测试生' })
+      await expect.poll(async () => await myCard.count(), { timeout: 15000 }).toBe(1)
+      // 蛋态 UI：蛋图（dragon_egg）+ 暖光浮动 class + 右上角 ✨
+      await expect(myCard.locator('img.egg[src*="dragon_egg.webp"]')).toBeVisible()
+      await expect(myCard.locator('.egg-spark')).toBeVisible()
+      // 点击蛋：ElMessage 提示「明天再来」，不弹详情/领养窗（无可见弹窗遮罩；关闭的弹窗 DOM 仍常驻）
+      await myCard.click()
+      await expect(page.locator('.el-message', { hasText: '明天再来看看' })).toBeVisible({ timeout: 5000 })
+      await expect(page.locator('.el-overlay:visible')).toHaveCount(0)
+
+      // 当天未跨自然日：hatch-seen 不带 force → 后端跨天守卫 changed=false，hatched 仍 0
+      r = await apiPost('/pet/hatch-seen', { studentId: testStudentId })
+      expect(r.data.changed).toBe(false)
+      me = await petOf()
+      expect(me.hatched).toBe(0)
+
+      // 蛋期间加分：成长值照常累计（流水/飘字正常）但不进化——levelUps 为空、level 仍 1
+      r = await apiPost('/pet/evaluate', { studentId: testStudentId, ruleId: rule5.id })
+      expect(r.data.affected).toBe(1)
+      expect((r.data.levelUps || []).length).toBe(0)
+      me = await petOf()
+      expect(me.exp).toBe(5)
+      expect(me.level).toBe(1)
+      expect(me.hatched).toBe(0)
+
+      // dev 开关 force 破壳（模拟次日首次打开座次表）：changed=true、hatched=1、按累计 exp 结算（5 分仍 Lv1）
+      r = await apiPost('/pet/hatch-seen', { studentId: testStudentId, force: true })
+      expect(r.data.changed).toBe(true)
+      me = await petOf()
+      expect(me.hatched).toBe(1)
+      expect(me.level).toBe(1)
+      await page.reload()
+      await expect(myCard.locator('img[src*="dragon_1.webp"]')).toBeVisible()
+
+      // ② 加分至 exp≥40 → 自动升 Lv2（蛋中已 +5，再 +5 共 7 次合计 40），UI 形态变 dragon_2
+      for (let i = 0; i < 7; i++) {
         r = await apiPost('/pet/evaluate', { studentId: testStudentId, ruleId: rule5.id })
         expect(r.data.affected).toBe(1)
       }
@@ -877,6 +910,10 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(rule5).toBeTruthy()
       expect(ruleMinus).toBeTruthy()
 
+      // 11f 末尾毕业典礼后宠物轮回为新蛋（hatched=0）：force 破壳模拟次日，否则点击蛋只提示不弹窗
+      const hatchR = await apiPost('/pet/hatch-seen', { studentId: testStudentId, force: true })
+      expect(hatchR.data.changed).toBe(true)
+
       // ① 全屏进化演出：UI 连点 8 次 +5（毕业重置后 exp 0→40），第 8 次升 Lv2 触发 6 秒分镜
       await page.goto('/seat')
       const myCard = page.locator('.seat, .pet-card', { hasText: 'E2E测试生' })
@@ -982,10 +1019,12 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await adoptDlg.locator('input').fill('E2E冰冰')
       await adoptDlg.getByRole('button', { name: /破壳领养/ }).click()
       await expect(adoptDlg).toBeHidden()
-      // 领养后卡片形态图为自创皮肤上传图（/uploads/ 静态映射）
-      await expect(card2.locator('img[src*="/uploads/"]')).toBeVisible({ timeout: 10000 })
+      // 领养后为孵化中蛋：卡片显示自创皮肤蛋图（egg 阶段同样传在 /uploads/）+ 孵化中标记
+      await expect(card2.locator('img.egg[src*="/uploads/"]')).toBeVisible({ timeout: 10000 })
+      await expect(card2.locator('.egg-badge', { hasText: '孵化中' })).toBeVisible()
       const p2 = (await apiGet('/pet/pets')).data.pets.find(p => p.studentId === testStudentId2)
       expect(p2.skinKey).toBe(skinKey)
+      expect(p2.hatched).toBe(0)
     })
 
     // ============ 11g. 头像与班级设置 ============
@@ -1033,6 +1072,10 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const sid3 = (await add3.json()).data
       await request.post(API + '/pet/adopt', {
         headers: authHeader(), data: { studentId: sid3, petKey: 'dragon', petName: 'E2E遥控龙' }
+      })
+      // 领养后为孵化中蛋：force 破壳（dev 开关），否则蛋中加分不进化、不产生 pendingEvolves
+      await request.post(API + '/pet/hatch-seen', {
+        headers: authHeader(), data: { studentId: sid3, force: true }
       })
       const rulesResp = await (await request.get(API + '/pet/rules', { headers: authHeader() })).json()
       const rulePlus = (rulesResp.data || []).filter(r => r.score > 0).sort((a, b) => b.score - a.score)[0]

@@ -35,21 +35,35 @@ export function setRemoteActive(v) { remoteActive = !!v }
 /** 遥控在线期间攒下的待播进化（手机页显示清单、PC 端收到播放指令后入队） */
 const heldEvolves = ref([])
 
-/** 升级事件入队（来源：同步接口 levelUps / 跨页 pendingEvolves / 待播列表播放）；同一学生去重 */
+/**
+ * 演出事件入队（来源：同步接口 levelUps / 跨页 pendingEvolves / 待播 pendingHatches / 待播列表播放）。
+ * kind='hatch' 破壳一幕（蛋→Lv1 幼体，固定图）；kind='evolve' 进化一幕（fromLevel→toLevel）。
+ * 去重按 (studentId, kind)：同一学生破壳后可紧随一幕进化（双喜临门），不算重复。
+ */
 function enqueueEvolves(ups) {
   if (!ups?.length) return
   for (const u of ups) {
-    const fromLevel = u.fromLevel ?? (u.toLevel - 1)
-    const dup = currentEvolve.value?.studentId === u.studentId ||
-      evolveQueue.value.some(q => q.studentId === u.studentId)
+    const kind = u.kind || 'evolve'
+    const key = u.skinKey || 'dragon'
+    let fromLevel, toLevel, fromImg, toImg
+    if (kind === 'hatch') {
+      // 破壳演出固定 蛋 → Lv1；蛋期间攒分导致的连升由紧随其后的 evolve 幕承担
+      fromLevel = 0; toLevel = 1
+      fromImg = skinImg(key, 'egg')
+      toImg = skinImg(key, 1)
+    } else {
+      fromLevel = u.fromLevel ?? (u.toLevel - 1)
+      toLevel = u.toLevel
+      fromImg = skinImg(key, fromLevel)
+      toImg = skinImg(key, toLevel)
+    }
+    const dup = (currentEvolve.value?.studentId === u.studentId && currentEvolve.value?.kind === kind) ||
+      evolveQueue.value.some(q => q.studentId === u.studentId && q.kind === kind)
     if (dup) continue
     evolveQueue.value.push({
-      studentId: u.studentId, name: u.name, petName: u.petName,
-      fromLevel, toLevel: u.toLevel,
-      skinKey: u.skinKey || 'dragon', fxTheme: u.fxTheme || 'gold',
-      fromImg: skinImg(u.skinKey || 'dragon', fromLevel),
-      toImg: skinImg(u.skinKey || 'dragon', u.toLevel),
-      pending: !!u.pending
+      kind, studentId: u.studentId, name: u.name, petName: u.petName,
+      fromLevel, toLevel, skinKey: key, fxTheme: u.fxTheme || 'gold',
+      fromImg, toImg, pending: !!u.pending
     })
   }
   void pumpEvolve()
@@ -68,12 +82,15 @@ async function pumpEvolve() {
   evolveBusy = false
 }
 
-/** 一幕结束：pending 来源通知后端清 evolve_pending 标记 */
+/** 一幕结束：pending 来源通知后端——破壳幕调 hatch-seen（置 hatched=1 并结算等级），进化幕调 evolve-seen 清标记 */
 async function onEvolveDone() {
   const scene = currentEvolve.value
   currentEvolve.value = null
   if (scene?.pending) {
-    try { await http.post('/pet/evolve-seen', { studentId: scene.studentId }) } catch (e) { /* 标记清理失败不阻塞 */ }
+    try {
+      if (scene.kind === 'hatch') await http.post('/pet/hatch-seen', { studentId: scene.studentId })
+      else await http.post('/pet/evolve-seen', { studentId: scene.studentId })
+    } catch (e) { /* 标记清理失败不阻塞下一幕 */ }
   }
   resolveScene?.()
   resolveScene = null
@@ -110,11 +127,14 @@ export function skinImg(skinKey, stage) {
 
 /**
  * 宠物行（/pet/pets 或 /pet/ranking 返回）→ 当前形态图。
- * /pets 行未领养时 petId===null 显示蛋；ranking 行无 petId 字段，按 level 取图。
+ * 未领养（petId===null）显示空位蛋；已领养但孵化中（hatched===0）也显示蛋（神秘蛋，视觉另加暖光）；
+ * 已破壳按 level 取形态图。ranking 行无 petId/hatched 字段，按 level 取图。
  */
 export function petImgOf(p) {
-  if (p && p.petId === null) return skinImg(p.skinKey || 'dragon', 'egg')
-  return skinImg(p?.skinKey || p?.petKey || 'dragon', (p && p.level) || 1)
+  const key = p?.skinKey || p?.petKey || 'dragon'
+  if (!p || p.petId === null) return skinImg(key, 'egg')
+  if (p.hatched === 0) return skinImg(key, 'egg')
+  return skinImg(key, (p && p.level) || 1)
 }
 
 /**
@@ -123,8 +143,12 @@ export function petImgOf(p) {
  * （领养/评价/撤回/毕业/荣誉榜/商店/评价项 CRUD）。
  * 弹窗模板由调用方提供；调用方只需把返回的状态与函数绑定到模板。
  * 创建时即自动加载宠物列表、评价项与皮肤。
+ * @param {object} [opts]
+ * @param {boolean} [opts.shows=true] 是否本地播放全屏演出（挂了 EvolutionShow 的 PC 座次表页为 true；
+ *   手机页传 false——手机不演破壳/进化，pending 进化仍攒 heldEvolves 清单供手机指挥投影播放）
  */
-export function usePets() {
+export function usePets(opts = {}) {
+  const showsEnabled = opts.shows !== false
   const pets = ref([])            // 全班宠物状态（含未领养，petId 为 null）
   const rules = ref([])           // 评价项
   const skins = ref([])           // 皮肤（内置 + 本账号自创）
@@ -164,6 +188,8 @@ export function usePets() {
   const floats = ref([])
   // 宠物图 Q 弹/缩一下：sid -> 'pop'（加分）| 'shrink'（扣分）
   const popKind = ref(new Map())
+  // 孵化中蛋被点击：sid -> true（左右摇晃 0.5s 后清除）
+  const eggWiggle = ref(new Map())
 
   /** 宠物图片：按皮肤映射，未领养显示蛋 */
   function petImg(p) { return petImgOf(p) }
@@ -220,14 +246,29 @@ export function usePets() {
 
   // ---------- 数据加载 ----------
   /**
-   * 加载全班宠物；返回体为 {pets, pendingEvolves}：
-   * pendingEvolves 是跨页面/自动联动/手机遥控导致的待演升级——
-   * 遥控在线时攒入 heldEvolves 待播列表（等手机"播放"指令），否则入队补播（演完调 evolve-seen）。
+   * 加载全班宠物；返回体为 {pets, pendingEvolves, pendingHatches}：
+   * - pendingHatches：到期待破壳的蛋（跨自然日），逐个入队 hatch 幕；若蛋期间攒够分（toLevel>1），
+   *   紧随一幕 evolve（破壳即连升，双喜临门）；破壳幕优先于进化幕播放，演完调 hatch-seen。
+   * - pendingEvolves：跨页面/自动联动/手机遥控导致的待演升级——遥控在线时攒入 heldEvolves 待播列表
+   *   （等手机"播放"指令），否则入队补播（演完调 evolve-seen）。
    */
   async function loadPets() {
     const data = await http.get('/pet/pets')
     pets.value = data.pets || data
-    const pending = (data.pendingEvolves || []).map(u => ({ ...u, pending: true }))
+    // 破壳幕（蛋只在 PC 座次表播，不走手机遥控待播）：每枚蛋一幕 hatch，toLevel>1 再加一幕 evolve
+    const hatchScenes = []
+    for (const h of (data.pendingHatches || [])) {
+      hatchScenes.push({ kind: 'hatch', ...h, pending: true })
+      if (h.toLevel > 1) {
+        hatchScenes.push({
+          kind: 'evolve', studentId: h.studentId, name: h.name, petName: h.petName,
+          skinKey: h.skinKey, fxTheme: h.fxTheme, fromLevel: 1, toLevel: h.toLevel, pending: true
+        })
+      }
+    }
+    // 破壳演出只在 PC 座次表页自动播放（手机页 shows=false：不入队，由投影端演完调 hatch-seen）
+    if (showsEnabled && hatchScenes.length) enqueueEvolves(hatchScenes)
+    const pending = (data.pendingEvolves || []).map(u => ({ ...u, kind: 'evolve', pending: true }))
     if (remoteActive) holdEvolves(pending)
     else enqueueEvolves(pending)
   }
@@ -249,8 +290,17 @@ export function usePets() {
   // ---------- 卡片交互（未排座宠物卡用；座位卡点击由调用方区分拖拽后调用） ----------
   function onCardClick(p) {
     if (batchMode.value) { togglePick(p.studentId); return }
-    if (p.petId) openDetail(p)
-    else openAdopt(p)
+    if (!p.petId) { openAdopt(p); return }
+    // 孵化中的蛋：摇晃 + 提示明天再来，不弹领养/详情窗（保持期待感）
+    if (p.hatched === 0) { wiggleEgg(p); return }
+    openDetail(p)
+  }
+
+  /** 孵化中蛋点击反馈：左右摇晃 0.5s + ElMessage 提示；加分飘字等照常，不受影响 */
+  function wiggleEgg(p) {
+    eggWiggle.value.set(p.studentId, true)
+    setTimeout(() => eggWiggle.value.delete(p.studentId), 500)
+    ElMessage.info(`🥚 ${p.petName || '小精灵'} 还在蛋里睡觉，明天再来看看吧！`)
   }
   function togglePick(sid) {
     const s = new Set(selected.value)
@@ -295,7 +345,7 @@ export function usePets() {
       petKey: adoptSkin.value,
       petName: adoptName.value
     })
-    ElMessage.success('领养成功！精灵破壳啦 🐣')
+    ElMessage.success(`领养成功！明天 ${adoptName.value.trim() || '小精灵'} 就会破壳啦~ 🥚`)
     adoptDlg.value = false
     await loadPets()
   }
@@ -443,7 +493,7 @@ export function usePets() {
 
   return {
     // 状态
-    pets, rules, skins, selected, batchMode, floats, popKind,
+    pets, rules, skins, selected, batchMode, floats, popKind, eggWiggle,
     adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
     adoptName, adoptSkin, adoptTarget, detailStudent, detailLogs, evalBatch, evalTarget, evalCat,
     gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,

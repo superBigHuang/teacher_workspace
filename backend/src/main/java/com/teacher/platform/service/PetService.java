@@ -64,10 +64,37 @@ public class PetService {
                     Integer.class, key, uid);
             if (ok == null || ok == 0) key = "dragon";
         }
-        jdbc.update("INSERT INTO pet(user_id,student_id,pet_key,pet_name,level,exp,adopted_at) VALUES(?,?,?, ?,1,0,?)",
+        // v1.2：领养后先是一颗孵化中的蛋（hatched=0），次日破壳；level 初始 1，破壳时按累计 exp 结算
+        jdbc.update("INSERT INTO pet(user_id,student_id,pet_key,pet_name,level,exp,hatched,adopted_at) VALUES(?,?,?, ?,1,0,0,?)",
                 uid, studentId, key,
                 petName == null || petName.isBlank() ? "云小龙" : petName, LocalDateTime.now());
         return true;
+    }
+
+    /** 是否到破壳时间：领养日期早于今天（跨自然日）。今天领养=false，昨天及更早=true */
+    public static boolean isHatchDue(LocalDateTime adoptedAt, LocalDate today) {
+        return adoptedAt != null && adoptedAt.toLocalDate().isBefore(today);
+    }
+
+    /**
+     * 破壳：孵化中的蛋到期（跨自然日）则置 hatched=1，并按蛋期间累计 exp 一次性结算等级。
+     * 跨天校验交给 SQL WHERE（DATE(adopted_at)&lt;CURDATE()），与待播查询同一条件，避免时区/类型歧义。
+     *
+     * @param forceDev true=跳过跨天校验（仅开发/E2E 开关 app.pet.dev-hatch，生产恒为 false）
+     * @return true=本次发生破壳
+     */
+    public boolean hatch(Long uid, Long studentId, boolean forceDev) {
+        List<Map<String, Object>> pets = jdbc.queryForList(
+                "SELECT id,exp,hatched FROM pet WHERE user_id=? AND student_id=?", uid, studentId);
+        if (pets.isEmpty()) return false;
+        Map<String, Object> p = pets.get(0);
+        if (((Number) p.get("hatched")).intValue() != 0) return false;   // 已破壳，幂等
+        int level = levelOf(((Number) p.get("exp")).intValue());
+        Long petId = ((Number) p.get("id")).longValue();
+        String sql = forceDev
+                ? "UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0"
+                : "UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0 AND DATE(adopted_at)<CURDATE()";
+        return jdbc.update(sql, level, petId) > 0;
     }
 
     /**
@@ -90,7 +117,7 @@ public class PetService {
             if (dup != null && dup > 0) return new AwardResult(0, null);
         }
         List<Map<String, Object>> pets = jdbc.queryForList(
-                "SELECT id,exp FROM pet WHERE user_id=? AND student_id=?", uid, studentId);
+                "SELECT id,exp,hatched FROM pet WHERE user_id=? AND student_id=?", uid, studentId);
         if (pets.isEmpty()) return new AwardResult(0, null);   // 未领养：不写流水、不补历史分
 
         int delta;
@@ -113,8 +140,15 @@ public class PetService {
                 uid, studentId, ruleId, delta, src, bizRef, logRemark);
         Long petId = ((Number) pets.get(0).get("id")).longValue();
         int oldExp = ((Number) pets.get(0).get("exp")).intValue();
-        // 扣分下限 0、加分满级封顶 280；等级按新 exp 重算（扣分不降级由 clamp 下限保证）
+        // 扣分下限 0、加分满级封顶 280
         int newExp = Math.max(0, Math.min(MAX_EXP, oldExp + delta));
+        if (((Number) pets.get(0).get("hatched")).intValue() == 0) {
+            // 孵化中（蛋）：成长值照常累计（蛋在吸收能量，飘字/流水正常），但等级保持 1、不进化、
+            // 不产生 LevelUp、不置 evolve_pending（蛋里看不见进化）；破壳时按累计 exp 一次性结算
+            jdbc.update("UPDATE pet SET exp=? WHERE id=?", newExp, petId);
+            return new AwardResult(1, null);
+        }
+        // 已破壳：等级按新 exp 重算（扣分不降级由 clamp 下限保证）
         int oldLevel = levelOf(oldExp);
         int newLevel = levelOf(newExp);
         jdbc.update("UPDATE pet SET exp=?, level=? WHERE id=?", newExp, newLevel, petId);
@@ -154,11 +188,16 @@ public class PetService {
         int delta = ((Number) log.get("score")).intValue();
         jdbc.update("DELETE FROM pet_log WHERE id=? AND user_id=?", logId, uid);
         List<Map<String, Object>> pets = jdbc.queryForList(
-                "SELECT id,exp FROM pet WHERE user_id=? AND student_id=?", uid, sid);
+                "SELECT id,exp,hatched FROM pet WHERE user_id=? AND student_id=?", uid, sid);
         if (pets.isEmpty()) return;
         Long petId = ((Number) pets.get(0).get("id")).longValue();
         int exp = ((Number) pets.get(0).get("exp")).intValue();
         int newExp = Math.max(0, Math.min(MAX_EXP, exp - delta));
+        if (((Number) pets.get(0).get("hatched")).intValue() == 0) {
+            // 蛋中撤回：只回退成长值，等级保持 1（破壳时才按累计 exp 结算）
+            jdbc.update("UPDATE pet SET exp=? WHERE id=?", newExp, petId);
+            return;
+        }
         jdbc.update("UPDATE pet SET exp=?, level=? WHERE id=?", newExp, levelOf(newExp), petId);
     }
 
@@ -217,8 +256,8 @@ public class PetService {
         if (((Number) pet.get("level")).intValue() < 5) return false;
         jdbc.update("INSERT INTO pet_badge(user_id,student_id,pet_key,pet_name) VALUES(?,?,?,?)",
                 uid, studentId, pet.get("pet_key"), pet.get("pet_name"));
-        // 毕业有独立仪式弹窗，不走进化演出：清待演标记
-        jdbc.update("UPDATE pet SET level=1, exp=0, graduated_count=graduated_count+1, evolve_pending=0 WHERE id=?",
+        // 毕业有独立仪式弹窗，不走进化演出：清待演标记；轮回从一颗新蛋开始（hatched=0，再孵一天）
+        jdbc.update("UPDATE pet SET level=1, exp=0, hatched=0, graduated_count=graduated_count+1, evolve_pending=0 WHERE id=?",
                 ((Number) pet.get("id")).longValue());
         return true;
     }
