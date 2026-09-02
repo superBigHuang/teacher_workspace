@@ -126,13 +126,13 @@ public class TimetableController extends BaseController {
         return Result.ok(Map.of("periods", periods, "cells", cells));
     }
 
-    /** 排课/换课（某班某天某节）；入参 id 兼容 Number 与数字字符串（前端 el-select value 可能传 "2"） */
+    /** 排课/换课（某班某天某节）；入参 id 兼容 Number 与数字字符串（前端 el-select value 可能传 "2"）；必填字段缺失给明确报错 */
     @PostMapping("/cell")
     public Result<Void> setCell(@RequestBody Map<String, Object> body) {
         Long uid = uid();
-        Long classId = Long.valueOf(String.valueOf(body.get("classId")));
-        int dow = Integer.parseInt(String.valueOf(body.get("dayOfWeek")));
-        Long periodId = Long.valueOf(String.valueOf(body.get("periodId")));
+        Long classId = reqLong(body, "classId");
+        int dow = reqInt(body, "dayOfWeek");
+        Long periodId = reqLong(body, "periodId");
         Long subjectId = body.get("subjectId") == null ? null : Long.valueOf(String.valueOf(body.get("subjectId")));
         jdbc.update("DELETE FROM timetable WHERE user_id=? AND class_id=? AND day_of_week=? AND period_id=?",
                 uid, classId, dow, periodId);
@@ -151,5 +151,23 @@ public class TimetableController extends BaseController {
 
     private String str(Object o) {
         return o == null ? "" : String.valueOf(o).trim();
+    }
+
+    /** 必填 Long 解析：兼容 Number 与数字字符串；缺失/空白时抛明确异常（避免 String.valueOf(null)="null" 再 NumberFormatException） */
+    private Long reqLong(Map<String, Object> body, String key) {
+        Object v = body.get(key);
+        if (v == null || String.valueOf(v).isBlank()) {
+            throw new IllegalArgumentException("参数错误：" + key + " 不能为空");
+        }
+        return Long.valueOf(String.valueOf(v));
+    }
+
+    /** 必填 int 解析，规则同 reqLong */
+    private int reqInt(Map<String, Object> body, String key) {
+        Object v = body.get(key);
+        if (v == null || String.valueOf(v).isBlank()) {
+            throw new IllegalArgumentException("参数错误：" + key + " 不能为空");
+        }
+        return Integer.parseInt(String.valueOf(v));
     }
 }

@@ -33,7 +33,7 @@
                  class="tt-cell"
                  :class="{ weekend: d >= 6, filled: cell(d, p.id) }"
                  @drop="onDrop($event, d, p)" @dragover.prevent
-                 @click="cell(d, p.id) ? removeCell(d, p.id) : openPick(d, p)">
+                 @click="cell(d, p.id) ? removeCell(d, p) : openPick(d, p)">
               <template v-if="cell(d, p.id)">
                 <div class="course" :style="{ background: cell(d, p.id).color }">
                   <div class="cname">{{ cell(d, p.id).subjectName }}</div>
