@@ -42,7 +42,11 @@
                 <el-tag v-else size="small" effect="plain" type="success">自定义</el-tag>
               </div>
               <div class="ab-def-meta">
-                <el-tag size="small" :color="tierColor(d.tier)" effect="dark" class="tier-tag">{{ tierText(d.tier) }} · {{ d.points }}分</el-tag>
+                <template v-if="d.tiered">
+                  <el-tag size="small" type="warning" effect="plain" class="tier-tag">🥉🥈🥇 三档进阶</el-tag>
+                  <span class="muted tier-steps">{{ tierStepsText(d) }}</span>
+                </template>
+                <el-tag v-else size="small" :color="tierColor(d.tier)" effect="dark" class="tier-tag">{{ tierText(d.tier) }} · {{ d.points }}分</el-tag>
                 <el-tag size="small" :type="rarityType(d.rarity)" effect="plain">{{ rarityText(d.rarity) }}</el-tag>
                 <span class="muted">{{ d.earnedCount }} 人获得</span>
               </div>
@@ -61,7 +65,11 @@
               <div class="ab-detail-name">{{ selected.name }}</div>
               <div class="muted">{{ selected.description || '老师自定义成就' }}</div>
               <div class="ab-detail-meta">
-                <el-tag size="small" :color="tierColor(selected.tier)" effect="dark">{{ tierText(selected.tier) }} · {{ selected.points }} 点</el-tag>
+                <template v-if="selected.tiered">
+                  <el-tag size="small" type="warning" effect="dark">🥉🥈🥇 三档进阶</el-tag>
+                  <span class="muted tier-steps">{{ tierStepsText(selected) }}</span>
+                </template>
+                <el-tag v-else size="small" :color="tierColor(selected.tier)" effect="dark">{{ tierText(selected.tier) }} · {{ selected.points }} 点</el-tag>
                 <el-tag size="small" :type="rarityType(selected.rarity)">{{ rarityText(selected.rarity) }}</el-tag>
                 <span class="muted">{{ selected.kind === 'AUTO' ? '自动评定' : '手动授予' }}</span>
               </div>
@@ -70,10 +78,20 @@
             <el-button type="primary" plain :icon="Present" @click="openAward">🎁 授予学生</el-button>
           </div>
 
+          <!-- 内置可进阶成就：三档门槛编辑（保存后下次扫描生效） -->
+          <div v-if="selected.builtin && selected.tiered" class="ab-thresh">
+            <span class="muted">三档门槛：</span>
+            <span v-for="(t, i) in editTiers" :key="t.tier" class="thresh-item">
+              {{ TIER_EMOJI[t.tier] }}<el-input-number v-model="editTiers[i].min" :min="1" :controls="false" size="small" style="width:64px" />
+            </span>
+            <el-button size="small" type="primary" plain @click="saveTiers">保存门槛</el-button>
+          </div>
+
           <h4>已获得学生（{{ selected.earners.length }}）</h4>
           <div v-if="selected.earners.length" class="ab-earners">
             <div v-for="e in selected.earners" :key="e.recordId" class="ab-earner">
               <span class="earner-name">{{ e.name }}</span>
+              <el-tag size="small" :color="tierColor(e.tier)" effect="dark" class="earner-tier">{{ tierText(e.tier) }}</el-tag>
               <el-tag size="small" :type="e.source === 'MANUAL' ? 'warning' : 'success'" effect="plain">
                 {{ e.source === 'MANUAL' ? '手动授予' : '自动获得' }}
               </el-tag>
@@ -133,7 +151,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Refresh, Plus, Delete, Present } from '@element-plus/icons-vue'
 import http from '../api/http'
@@ -174,16 +192,24 @@ async function doScan(manual) {
   }
 }
 
-/** 新颁发成就合并弹庆祝通知（按成就分组，最多列 5 条） */
+/** 新颁发/升级成就弹庆祝通知（每条一行，最多 5 条；区分新获得与升级、大满贯突出） */
+function awardLine(a) {
+  const emoji = { BRONZE: '🥉', SILVER: '🥈', GOLD: '🥇', PLATINUM: '🏆' }[a.tier] || '🏅'
+  const tierName = { BRONZE: '铜牌', SILVER: '银牌', GOLD: '金牌', PLATINUM: '白金' }[a.tier] || ''
+  if (a.defName === '大满贯') {
+    if (a.kind === 'upgrade') {
+      const pts = { BRONZE: 50, SILVER: 150, GOLD: 300 }[a.tier] || ''
+      return `🏆 ${a.name} 的大满贯升至${emoji}${tierName}（${pts} 点）！`
+    }
+    return `🏆 ${a.name} 集齐全部成就，获得大满贯${emoji}！`
+  }
+  if (a.kind === 'upgrade') return `⬆️ ${a.name} 的「${a.defName}」升级为${emoji}${tierName}！`
+  return `🎉 ${a.name} 获得「${a.defName}」${emoji}`
+}
 function notifyAwards(list) {
-  const byDef = {}
-  list.forEach(a => { (byDef[a.defName] ||= []).push(a.name) })
-  const lines = Object.entries(byDef).slice(0, 5).map(([def, names]) => {
-    const shown = names.slice(0, 3).join('、')
-    return `🏅 ${shown}${names.length > 3 ? ` 等 ${names.length} 人` : ''} 获得「${def}」`
-  })
+  const lines = list.slice(0, 5).map(awardLine)
   ElNotification({
-    title: `🎉 新成就解锁（共 ${list.length} 枚）`,
+    title: `🎉 成就播报（共 ${list.length} 条）`,
     message: lines.join('<br>'),
     dangerouslyUseHTMLString: true, duration: 8000, type: 'success'
   })
@@ -248,9 +274,44 @@ async function submitAward() {
   load()
 }
 
+// ---------- 三档门槛 ----------
+const TIER_EMOJI = { BRONZE: '🥉', SILVER: '🥈', GOLD: '🥇', PLATINUM: '🏆' }
+/** 解析定义 rule_params（保留 fullScore 等非阈值字段） */
+function defParams(d) { try { return JSON.parse(d.rule_params || '{}') } catch { return {} } }
+function defTiers(d) { return defParams(d).tiers || [] }
+/** 定义行三档门槛短文本，如"🥉10次 / 🥈20次 / 🥇30次" */
+function tierStepsText(d) {
+  return defTiers(d).map(t => tierStepLabel(d.rule_type, t)).join(' / ')
+}
+/** 单档门槛标签：按规则类型带单位 */
+function tierStepLabel(ruleType, t) {
+  const e = TIER_EMOJI[t.tier] || ''
+  const v = t.min
+  switch (ruleType) {
+    case 'RANK_TOP': return `${e}前${v}`
+    case 'PET_LEVEL': return `${e}Lv.${v}`
+    case 'RANK_UP': return `${e}升${v}名`
+    case 'SCORE_FULL': return `${e}${v}科满分`
+    case 'CONTINUOUS_ATTENDANCE': return v >= 20 ? `${e}整学期` : `${e}${v}周`
+    default: return `${e}${v}次`
+  }
+}
+// 内置可进阶成就阈值编辑：选中定义变化时拷贝三档 min
+const editTiers = ref([])
+watch(selectedId, () => {
+  editTiers.value = defTiers(selected.value || {}).map(t => ({ tier: t.tier, min: Number(t.min) }))
+}, { immediate: true })
+async function saveTiers() {
+  const p = defParams(selected.value)
+  p.tiers = editTiers.value
+  await http.put(`/achievement/def/${selected.value.id}`, { ruleParams: p })
+  ElMessage.success('三档门槛已保存，下次扫描生效')
+  load()
+}
+
 // ---------- 展示辅助 ----------
 const TIER_TEXT = { BRONZE: '铜', SILVER: '银', GOLD: '金', PLATINUM: '白金' }
-const TIER_COLOR = { BRONZE: '#c07a3e', SILVER: '#9a93b4', GOLD: '#e8a526', PLATINUM: '#5fb5e8' }
+const TIER_COLOR = { BRONZE: '#a8642f', SILVER: '#9aa6b8', GOLD: '#f0b400', PLATINUM: '#5fb5e8' }
 const tierText = t => TIER_TEXT[t] || t
 const tierColor = t => TIER_COLOR[t] || '#999'
 function rarityText(r) {
@@ -283,8 +344,16 @@ defineExpose({ doScan, load })
 .rank-badges { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: #6b6480; margin-left: 8px; }
 .rank-pts { color: #e08a3c; font-size: 16px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; }
-.c-bronze { background: #c07a3e; } .c-silver { background: #9a93b4; }
-.c-gold { background: #e8a526; } .c-plat { background: #5fb5e8; }
+.c-bronze { background: #a8642f; } .c-silver { background: #9aa6b8; }
+.c-gold { background: #f0b400; } .c-plat { background: #5fb5e8; }
+.tier-steps { font-size: 12px; white-space: nowrap; }
+/* 三档门槛编辑行 */
+.ab-thresh {
+  display: flex; align-items: center; gap: 12px; margin: 12px 0 4px;
+  padding: 8px 12px; background: #faf8fd; border-radius: 10px; flex-wrap: wrap;
+}
+.thresh-item { display: inline-flex; align-items: center; gap: 4px; font-size: 15px; }
+.earner-tier { border: none; color: #fff; min-width: 34px; justify-content: center; }
 
 /* 左右两栏 */
 .ab-body { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }

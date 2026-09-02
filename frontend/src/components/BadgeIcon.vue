@@ -26,11 +26,11 @@ const tierClass = computed(() => 'tier-' + (props.tier || 'BRONZE').toLowerCase(
 }
 .badge-icon img { width: 78%; height: 78%; object-fit: contain; position: relative; z-index: 1; }
 
-/* 四级底托渐变：铜橙棕 / 银淡紫灰 / 金黄 / 白金炫彩 */
-.tier-bronze   { background: linear-gradient(135deg, #e6b083, #b06a32); }
-.tier-silver   { background: linear-gradient(135deg, #f0ecf7, #bcb5d0); }
-.tier-gold     { background: linear-gradient(135deg, #ffe28a, #f2a93a); }
-.tier-platinum { background: linear-gradient(135deg, #a8ecff, #e6dcff 45%, #ffd4ec); }
+/* 四级底托渐变：古铜棕 / 纯银灰（去紫）/ 亮金黄 / 白金炫彩——四色一眼可分 */
+.tier-bronze   { background: linear-gradient(135deg, #c98a5b, #8a5326); }
+.tier-silver   { background: linear-gradient(135deg, #f4f6fa, #a9b3c2); }
+.tier-gold     { background: linear-gradient(135deg, #fff0a0, #f5b800); }
+.tier-platinum { background: linear-gradient(135deg, #b8eeff, #e6dcff 45%, #ffd4ec); }
 
 /* 未获得：灰底托 + 图标灰化半透明，"灰扑扑" */
 .badge-icon.locked { background: linear-gradient(135deg, #eceaf1, #d8d5e0); box-shadow: none; }
@@ -48,8 +48,8 @@ const tierClass = computed(() => 'tier-' + (props.tier || 'BRONZE').toLowerCase(
 .tier-silver.pop   { animation: badge-pop .55s cubic-bezier(.34,1.56,.64,1) both, glow-silver 1.4s .5s ease-out; }
 .tier-gold.pop     { animation: badge-pop .55s cubic-bezier(.34,1.56,.64,1) both, glow-gold 1.4s .5s ease-out; }
 .tier-platinum.pop { animation: badge-pop .55s cubic-bezier(.34,1.56,.64,1) both, glow-plat 1.6s .5s ease-out; }
-@keyframes glow-bronze   { 0% { box-shadow: 0 0 0 0 rgba(214,140,70,.8); } 100% { box-shadow: 0 0 0 18px rgba(214,140,70,0); } }
-@keyframes glow-silver   { 0% { box-shadow: 0 0 0 0 rgba(170,160,200,.8); } 100% { box-shadow: 0 0 0 18px rgba(170,160,200,0); } }
-@keyframes glow-gold     { 0% { box-shadow: 0 0 0 0 rgba(245,190,60,.9); } 100% { box-shadow: 0 0 0 20px rgba(245,190,60,0); } }
+@keyframes glow-bronze   { 0% { box-shadow: 0 0 0 0 rgba(168,100,47,.8); } 100% { box-shadow: 0 0 0 18px rgba(168,100,47,0); } }
+@keyframes glow-silver   { 0% { box-shadow: 0 0 0 0 rgba(154,166,184,.85); } 100% { box-shadow: 0 0 0 18px rgba(154,166,184,0); } }
+@keyframes glow-gold     { 0% { box-shadow: 0 0 0 0 rgba(245,184,0,.95); } 100% { box-shadow: 0 0 0 20px rgba(245,184,0,0); } }
 @keyframes glow-plat     { 0% { box-shadow: 0 0 0 0 rgba(170,220,255,.95); } 100% { box-shadow: 0 0 0 22px rgba(200,180,255,0); } }
 </style>

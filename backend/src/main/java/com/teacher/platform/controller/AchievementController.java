@@ -13,7 +13,9 @@ import java.util.*;
 /**
  * 学生成就系统（PSN 奖杯式徽章墙）：
  * 成就定义（内置 user_id=0 全局共享 UNION 可见 + 老师自定义 per-user）、
- * 自动扫描颁发（幂等，唯一键 uk_sa）、手动授予/撤销、学生徽章墙、成就榜。
+ * 自动扫描颁发/进阶（幂等、只升不降，唯一键 uk_sa）、手动授予/撤销、学生徽章墙、成就榜、座位奖牌。
+ * 奖牌档位：可进阶成就学生当前档在 student_achievement.tier（NULL=老数据回退 achievement_def.tier）；
+ * 大满贯(COLLECTOR)铜银金点数 ×5（50/150/300），PLATINUM 老白金保留 100。
  * 全部接口按 uid 隔离。
  */
 @RestController
@@ -25,7 +27,7 @@ public class AchievementController extends BaseController {
     private final TermStatsService termStats;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** 各等级点数：铜10/银30/金60/白金100 */
+    /** 各等级基础点数：铜10/银30/金60/白金100 */
     private static final Map<String, Integer> TIER_POINTS = Map.of(
             "BRONZE", 10, "SILVER", 30, "GOLD", 60, "PLATINUM", 100);
 
@@ -64,22 +66,34 @@ public class AchievementController extends BaseController {
                         "WHERE sa.def_id=d.id AND sa.user_id=? AND sa.term=?) earnedCount " +
                         "FROM achievement_def d WHERE d.user_id=0 OR d.user_id=? ORDER BY d.kind DESC, d.id",
                 uid, term, uid);
-        // 获得名单一次性查出，内存分组
+        attachEarners(uid, term, list);
+        return Result.ok(list);
+    }
+
+    /** 为定义列表填充 points/稀有度/获得名单（/defs 与 /board 共用） */
+    private void attachEarners(Long uid, String term, List<Map<String, Object>> list) {
+        int size = classSize(uid);
         Map<Long, List<Map<String, Object>>> earners = new HashMap<>();
         jdbc.queryForList(
                 "SELECT sa.id recordId, sa.def_id defId, sa.student_id studentId, s.name, " +
-                        "sa.awarded_at awardedAt, sa.source, sa.remark " +
+                        "sa.awarded_at awardedAt, sa.source, sa.remark, COALESCE(sa.tier, d.tier) tier " +
                         "FROM student_achievement sa JOIN student s ON s.id=sa.student_id " +
+                        "JOIN achievement_def d ON d.id=sa.def_id " +
                         "WHERE sa.user_id=? AND sa.term=? ORDER BY sa.awarded_at DESC, sa.id DESC", uid, term)
                 .forEach(r -> earners.computeIfAbsent(((Number) r.get("defId")).longValue(), k -> new ArrayList<>()).add(r));
         for (Map<String, Object> d : list) {
             Long defId = ((Number) d.get("id")).longValue();
             int earned = ((Number) d.get("earnedCount")).intValue();
-            d.put("points", TIER_POINTS.getOrDefault(str(d.get("tier")), 0));
+            d.put("points", defPoints(d));
             d.put("rarity", rarity(earned, size));
             d.put("earners", earners.getOrDefault(defId, new ArrayList<>()));
         }
-        return Result.ok(list);
+    }
+
+    /** 定义行展示点数：大满贯展示铜档×5=50，可进阶/固定档取基础点数（前端三档门槛另展示） */
+    private int defPoints(Map<String, Object> d) {
+        if ("COLLECTOR".equals(str(d.get("rule_type")))) return 50;
+        return TIER_POINTS.getOrDefault(str(d.get("tier")), 0);
     }
 
     /** 创建自定义成就（kind=MANUAL）：名称/图标/等级/描述 */
@@ -98,7 +112,7 @@ public class AchievementController extends BaseController {
     }
 
     /**
-     * 编辑定义：内置（builtin=1）仅可改 enabled（停用/启用）与 rule_params（调阈值）；
+     * 编辑定义：内置（builtin=1）仅可改 enabled（停用/启用）与 rule_params（调阈值，可进阶传三档 tiers）；
      * 自定义可改 name/description/icon/tier/enabled。
      */
     @PutMapping("/def/{id}")
@@ -146,7 +160,7 @@ public class AchievementController extends BaseController {
         return Result.ok();
     }
 
-    /** 扫描全班自动成就（当前学期），幂等颁发，返回新颁发清单（前端跳杯庆祝） */
+    /** 扫描全班自动成就（当前学期），幂等颁发/升级，返回新颁发清单（前端跳杯庆祝） */
     @PostMapping("/scan")
     public Result<Map<String, Object>> scan() {
         List<Map<String, Object>> newAwards = scanner.scan(uid());
@@ -154,8 +168,50 @@ public class AchievementController extends BaseController {
     }
 
     /**
+     * 座位奖牌：座次表宠物上方挂本学期 top3。
+     * 先静默扫描（保证新发/升级及时上屏，不抛错），再一条 SQL 查全班本学期奖牌，
+     * 内存按有效点数（大满贯 ×5）降序、同点数按 awarded_at 倒序（SQL 序稳定保持）每生取前 3。
+     * 返回 { "<studentId>": [{icon, name, tier}, ...] }。
+     */
+    @GetMapping("/seat-medals")
+    public Result<Map<String, List<Map<String, Object>>>> seatMedals() {
+        Long uid = uid();
+        try {
+            scanner.scan(uid);
+        } catch (Exception e) {
+            System.out.println("[seat-medals] 扫描跳过：" + e.getMessage());
+        }
+        String term = currentTerm(uid);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT sa.student_id sid, d.icon icon, d.name name, d.rule_type rt, " +
+                        "COALESCE(sa.tier, d.tier) tier, sa.awarded_at at " +
+                        "FROM student_achievement sa " +
+                        "JOIN achievement_def d ON d.id=sa.def_id " +
+                        "JOIN student s ON s.id=sa.student_id AND s.user_id=sa.user_id " +
+                        "WHERE sa.user_id=? AND sa.term=? ORDER BY sa.awarded_at DESC, sa.id DESC",
+                uid, term);
+        Map<Long, List<Map<String, Object>>> grouped = new HashMap<>();
+        for (Map<String, Object> r : rows) {
+            String tier = str(r.get("tier"));
+            Map<String, Object> medal = new LinkedHashMap<>();
+            medal.put("icon", r.get("icon"));
+            medal.put("name", r.get("name"));
+            medal.put("tier", tier);
+            medal.put("pts", medalPoints(str(r.get("rt")), tier));   // 排序用，返回前移除
+            grouped.computeIfAbsent(((Number) r.get("sid")).longValue(), k -> new ArrayList<>()).add(medal);
+        }
+        Map<String, List<Map<String, Object>>> result = new HashMap<>();
+        grouped.forEach((sid, list) -> {
+            list.sort((a, b) -> Integer.compare((int) b.get("pts"), (int) a.get("pts")));
+            list.forEach(m -> m.remove("pts"));
+            result.put(String.valueOf(sid), list.size() > 3 ? new ArrayList<>(list.subList(0, 3)) : list);
+        });
+        return Result.ok(result);
+    }
+
+    /**
      * 学生徽章墙：累计统计（总枚数/点数/四色计数）+ 按学期分组的徽章。
-     * 当前学期返回全部启用定义（获得=彩色带日期/备注，未获得 AUTO 带进度文本）；
+     * 当前学期返回全部启用定义（获得=彩色带日期/备注/当前档，未获得 AUTO 带进度文本）；
      * 历史学期仅返回已获得徽章。
      */
     @GetMapping("/student/{studentId}")
@@ -164,19 +220,20 @@ public class AchievementController extends BaseController {
         String[] range = termStats.termRange(uid);
         String term = range[0] + "~" + range[1];
 
-        // 累计统计（全部学期）
+        // 累计统计（全部学期，点数按学生当前档：大满贯铜银金 ×5）
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("total", 0); stats.put("points", 0);
         for (String t : List.of("BRONZE", "SILVER", "GOLD", "PLATINUM")) stats.put(t.toLowerCase(), 0);
         List<Map<String, Object>> all = jdbc.queryForList(
-                "SELECT d.tier tier FROM student_achievement sa JOIN achievement_def d ON d.id=sa.def_id " +
+                "SELECT d.rule_type rt, COALESCE(sa.tier, d.tier) tier FROM student_achievement sa " +
+                        "JOIN achievement_def d ON d.id=sa.def_id " +
                         "WHERE sa.user_id=? AND sa.student_id=?", uid, studentId);
         int total = 0, points = 0;
         Map<String, Integer> tierCount = new HashMap<>();
         for (Map<String, Object> r : all) {
             String tier = str(r.get("tier"));
             total++;
-            points += TIER_POINTS.getOrDefault(tier, 0);
+            points += medalPoints(str(r.get("rt")), tier);
             tierCount.merge(tier, 1, Integer::sum);
         }
         stats.put("total", total);
@@ -190,10 +247,10 @@ public class AchievementController extends BaseController {
         jdbc.queryForList(
                 "SELECT * FROM student_achievement WHERE user_id=? AND student_id=? AND term=?",
                 uid, studentId, term).forEach(r -> earnedMap.put(((Number) r.get("def_id")).longValue(), r));
-        // 未获得 AUTO 定义的当前进度
-        Map<Long, String> progressMap = new HashMap<>();
-        scanner.evaluateStudent(uid, studentId).forEach(
-                e -> progressMap.put(((Number) e.get("defId")).longValue(), str(e.get("progress"))));
+        // 自动规则评估（进度文本/三档门槛/当前达成档）
+        Map<Long, Map<String, Object>> evalMap = new HashMap<>();
+        scanner.evaluateStudent(uid, studentId).forEach(e ->
+                evalMap.put(((Number) e.get("defId")).longValue(), e));
 
         List<Map<String, Object>> currentBadges = new ArrayList<>();
         for (Map<String, Object> d : defs) {
@@ -201,12 +258,20 @@ public class AchievementController extends BaseController {
             Map<String, Object> sa = earnedMap.get(defId);
             Map<String, Object> b = badgeFromDef(d);
             b.put("earned", sa != null);
+            String tier = effTier(sa, d);
+            b.put("tier", tier);
+            b.put("points", medalPoints(str(d.get("rule_type")), tier));
             if (sa != null) {
                 b.put("awardedAt", sa.get("awarded_at"));
                 b.put("source", sa.get("source"));
                 b.put("remark", sa.get("remark"));
-            } else if ("AUTO".equals(str(d.get("kind")))) {
-                b.put("progress", progressMap.get(defId));
+            }
+            Map<String, Object> ev = evalMap.get(defId);
+            if ("AUTO".equals(str(d.get("kind"))) && ev != null) {
+                // 未获得：显示入门进度；已持有：仅当评估档不低于持有档（含满档/可升档）才显示，避免回落误导
+                boolean showProgress = sa == null
+                        || ev.get("tier") != null && tierRank(str(ev.get("tier"))) >= tierRank(tier);
+                if (showProgress && ev.get("progress") != null) b.put("progress", str(ev.get("progress")));
             }
             currentBadges.add(b);
         }
@@ -221,11 +286,15 @@ public class AchievementController extends BaseController {
             if (tname.equals(term)) continue;
             List<Map<String, Object>> badges = new ArrayList<>();
             jdbc.queryForList(
-                    "SELECT d.*, sa.awarded_at awardedAt, sa.source source, sa.remark remark " +
+                    "SELECT d.*, sa.tier saTier, sa.awarded_at awardedAt, sa.source source, sa.remark remark " +
                             "FROM student_achievement sa JOIN achievement_def d ON d.id=sa.def_id " +
                             "WHERE sa.user_id=? AND sa.student_id=? AND sa.term=? ORDER BY d.id", uid, studentId, tname)
                     .forEach(r -> {
                         Map<String, Object> b = badgeFromDef(r);
+                        String tier = str(r.get("saTier"));
+                        if (tier.isBlank()) tier = str(r.get("tier"));
+                        b.put("tier", tier);
+                        b.put("points", medalPoints(str(r.get("rule_type")), tier));
                         b.put("earned", true);
                         b.put("awardedAt", r.get("awardedAt"));
                         b.put("source", r.get("source"));
@@ -279,30 +348,51 @@ public class AchievementController extends BaseController {
 
     /**
      * 成就榜：本班每生本学期获得枚数/点数/四色计数（按点数降序）+ 定义列表（含获得人数/稀有度/名单）。
+     * 点数/四色按学生当前档（COALESCE sa.tier,d.tier）Java 聚合，大满贯铜银金 ×5。
      */
     @GetMapping("/board")
     public Result<Map<String, Object>> board() {
         Long uid = uid();
         String term = currentTerm(uid);
         Long classId = termStats.homeroomClassId(uid);
-        int size = classSize(uid);
 
-        // 排行榜：本班学生 LEFT JOIN 本学期成就
-        List<Map<String, Object>> rankings = jdbc.queryForList(
-                "SELECT s.id studentId, s.name, s.gender, " +
-                        "COUNT(sa.id) cnt, " +
-                        "COALESCE(SUM(CASE d.tier WHEN 'BRONZE' THEN 10 WHEN 'SILVER' THEN 30 " +
-                        "WHEN 'GOLD' THEN 60 WHEN 'PLATINUM' THEN 100 ELSE 0 END),0) points, " +
-                        "SUM(CASE WHEN d.tier='BRONZE' THEN 1 ELSE 0 END) bronze, " +
-                        "SUM(CASE WHEN d.tier='SILVER' THEN 1 ELSE 0 END) silver, " +
-                        "SUM(CASE WHEN d.tier='GOLD' THEN 1 ELSE 0 END) gold, " +
-                        "SUM(CASE WHEN d.tier='PLATINUM' THEN 1 ELSE 0 END) platinum " +
+        // 排行榜：本班学生 LEFT JOIN 本学期成就，逐行内存聚合（点数规则在 Java，SQL 无法表达 ×5）
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT s.id studentId, s.name, s.gender, s.stu_no stuNo, " +
+                        "d.rule_type rt, COALESCE(sa.tier, d.tier) tier " +
                         "FROM student s " +
                         "LEFT JOIN student_achievement sa ON sa.student_id=s.id AND sa.user_id=s.user_id AND sa.term=? " +
                         "LEFT JOIN achievement_def d ON d.id=sa.def_id " +
-                        "WHERE s.user_id=? AND s.class_id=? " +
-                        "GROUP BY s.id, s.name, s.gender ORDER BY points DESC, cnt DESC, s.stu_no",
+                        "WHERE s.user_id=? AND s.class_id=?",
                 term, uid, classId);
+        Map<Long, Map<String, Object>> agg = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            Long sid = ((Number) r.get("studentId")).longValue();
+            Map<String, Object> a = agg.computeIfAbsent(sid, k -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("studentId", sid);
+                m.put("name", r.get("name"));
+                m.put("gender", r.get("gender"));
+                m.put("stuNo", r.get("stuNo"));
+                m.put("cnt", 0); m.put("points", 0);
+                m.put("bronze", 0); m.put("silver", 0); m.put("gold", 0); m.put("platinum", 0);
+                return m;
+            });
+            String tier = str(r.get("tier"));
+            if (tier.isBlank()) continue;
+            a.put("cnt", ((int) a.get("cnt")) + 1);
+            a.put("points", ((int) a.get("points")) + medalPoints(str(r.get("rt")), tier));
+            String key = tier.toLowerCase(Locale.ROOT);
+            if (a.containsKey(key)) a.put(key, ((int) a.get(key)) + 1);
+        }
+        List<Map<String, Object>> rankings = new ArrayList<>(agg.values());
+        rankings.sort((x, y) -> {
+            int c = Integer.compare((int) y.get("points"), (int) x.get("points"));
+            if (c != 0) return c;
+            c = Integer.compare((int) y.get("cnt"), (int) x.get("cnt"));
+            if (c != 0) return c;
+            return str(x.get("stuNo")).compareTo(str(y.get("stuNo")));
+        });
 
         // 定义列表（含获得人数/稀有度/名单）
         List<Map<String, Object>> defList = jdbc.queryForList(
@@ -310,24 +400,11 @@ public class AchievementController extends BaseController {
                         "WHERE sa.def_id=d.id AND sa.user_id=? AND sa.term=?) earnedCount " +
                         "FROM achievement_def d WHERE d.user_id=0 OR d.user_id=? ORDER BY d.kind DESC, d.id",
                 uid, term, uid);
-        Map<Long, List<Map<String, Object>>> earners = new HashMap<>();
-        jdbc.queryForList(
-                "SELECT sa.id recordId, sa.def_id defId, sa.student_id studentId, s.name, " +
-                        "sa.awarded_at awardedAt, sa.source, sa.remark " +
-                        "FROM student_achievement sa JOIN student s ON s.id=sa.student_id " +
-                        "WHERE sa.user_id=? AND sa.term=? ORDER BY sa.awarded_at DESC, sa.id DESC", uid, term)
-                .forEach(r -> earners.computeIfAbsent(((Number) r.get("defId")).longValue(), k -> new ArrayList<>()).add(r));
-        for (Map<String, Object> d : defList) {
-            Long defId = ((Number) d.get("id")).longValue();
-            int earned = ((Number) d.get("earnedCount")).intValue();
-            d.put("points", TIER_POINTS.getOrDefault(str(d.get("tier")), 0));
-            d.put("rarity", rarity(earned, size));
-            d.put("earners", earners.getOrDefault(defId, new ArrayList<>()));
-        }
+        attachEarners(uid, term, defList);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("term", term);
-        result.put("classSize", size);
+        result.put("classSize", classSize(uid));
         result.put("rankings", rankings);
         result.put("defs", defList);
         return Result.ok(result);
@@ -335,7 +412,28 @@ public class AchievementController extends BaseController {
 
     // ---------- 辅助 ----------
 
-    /** 由定义行组装徽章视图对象 */
+    /** 奖牌有效点数：大满贯(COLLECTOR)铜银金 ×5（50/150/300）；PLATINUM 老白金保留 100 不翻倍 */
+    private int medalPoints(String ruleType, String tier) {
+        if (tier == null || tier.isBlank()) return 0;
+        int p = TIER_POINTS.getOrDefault(tier, 0);
+        return "COLLECTOR".equals(ruleType) && !"PLATINUM".equals(tier) ? p * 5 : p;
+    }
+
+    /** 档位序数（高低比较用）；未知档按 -1 */
+    private int tierRank(String tier) {
+        return List.of("BRONZE", "SILVER", "GOLD", "PLATINUM").indexOf(tier);
+    }
+
+    /** 学生当前持有档：sa.tier 优先，空（老数据）回退定义档 */
+    private String effTier(Map<String, Object> sa, Map<String, Object> d) {
+        if (sa != null) {
+            String t = str(sa.get("tier"));
+            if (!t.isBlank()) return t;
+        }
+        return str(d.get("tier"));
+    }
+
+    /** 由定义行组装徽章视图对象（含 tiered 标志与三档门槛 tiers） */
     private Map<String, Object> badgeFromDef(Map<String, Object> d) {
         Map<String, Object> b = new LinkedHashMap<>();
         b.put("defId", d.get("id"));
@@ -344,8 +442,27 @@ public class AchievementController extends BaseController {
         b.put("icon", d.get("icon"));
         b.put("tier", d.get("tier"));
         b.put("kind", d.get("kind"));
+        b.put("ruleType", d.get("rule_type"));
+        b.put("tiered", d.get("tiered") != null && ((Number) d.get("tiered")).intValue() == 1);
+        b.put("tiers", parseTiers(d.get("rule_params")));
         b.put("points", TIER_POINTS.getOrDefault(str(d.get("tier")), 0));
         return b;
+    }
+
+    /** 解析 rule_params JSON 中的 tiers 三档门槛数组（缺失/损坏返回 null） */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseTiers(Object ruleParams) {
+        try {
+            String json = str(ruleParams);
+            if (json.isBlank()) return null;
+            Map<String, Object> p = objectMapper.readValue(json, Map.class);
+            Object t = p.get("tiers");
+            if (t instanceof List<?> l && !l.isEmpty() && l.get(0) instanceof Map) {
+                return (List<Map<String, Object>>) t;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     /** 稀有度：0 人获得返回 NONE（前端显示"暂无"），否则按本班获得率分档 */

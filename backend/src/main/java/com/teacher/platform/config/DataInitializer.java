@@ -65,6 +65,11 @@ public class DataInitializer implements CommandLineRunner {
         // 宠物 v1.2：孵蛋破壳（0=孵化中蛋，1=已破壳；DEFAULT 1 保证存量宠物全部视为已破壳，不回退成蛋）
         ensureColumn("pet", "hatched",
                 "hatched TINYINT NOT NULL DEFAULT 1 COMMENT '是否已破壳：0=孵化中蛋，1=已出生'");
+        // 成就进阶：定义表 tiered=1 表示铜银金三档可进阶；获得记录 tier 为学生当前持有档（NULL=老数据回退 def.tier）
+        ensureColumn("achievement_def", "tiered",
+                "tiered TINYINT NOT NULL DEFAULT 0 COMMENT '1=可进阶（铜银金三档），0=固定档'");
+        ensureColumn("student_achievement", "tier",
+                "tier VARCHAR(16) NULL COMMENT '当前持有档 BRONZE/SILVER/GOLD/PLATINUM；NULL=老数据回退 def.tier'");
 
         // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
         rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");
@@ -172,39 +177,104 @@ public class DataInitializer implements CommandLineRunner {
 
     /**
      * 内置成就定义（user_id=0 全局共享，所有账号 UNION 可见）。
-     * 10 条自动规则 + 1 条大满贯；按 name 幂等补齐，老师可改阈值/停用但不可删。
+     * 固定档 AUTO 7 条 + 可进阶 AUTO 4 条 + 大满贯 1 条；按 name 幂等补齐，老师可改阈值/停用但不可删。
+     * 进阶版（tiered=1）：一条定义带铜银金三档阈值（rule_params.tiers），学生只持有当前最高档。
      */
     private void seedBuiltinAchievements() {
-        if (count("SELECT COUNT(*) FROM achievement_def WHERE user_id=0") > 0) return;
-        // 每行：名称, 描述, 图标, 等级, 规则类型, 规则参数JSON
-        Object[][] defs = {
-                {"全勤之星", "本学期无迟到、无缺勤、无请假记录，全勤到校", "check", "SILVER",
-                        "PERFECT_ATTENDANCE", "{\"allowLeave\":false}"},
-                {"作业全勤", "本学期作业全部按时上交，没有未交记录", "books", "SILVER",
-                        "PERFECT_HOMEWORK", "{}"},
-                {"纪律标兵", "本学期没有课堂违纪记录，自律守纪", "shield", "SILVER",
-                        "PERFECT_DISCIPLINE", "{}"},
-                {"进步之星", "最近两次考试班级排名提升 5 名及以上", "rocket", "SILVER",
-                        "RANK_UP", "{\"minRankUp\":5}"},
-                {"全科优秀", "最近一次考试所有科目成绩均达到优秀线", "glowing-star", "GOLD",
-                        "ALL_EXCELLENT", "{}"},
-                {"单科状元", "任一科目取得班级最高分（并列均可获得）", "crown", "BRONZE",
-                        "SUBJECT_TOP", "{}"},
-                {"满分达人", "任一科目取得满分（满分线默认 100 分）", "hundred", "BRONZE",
-                        "SCORE_FULL", "{\"fullScore\":100}"},
-                {"劳动能手", "本学期参与值日劳动 10 次及以上", "broom", "BRONZE",
-                        "DUTY_COUNT", "{\"minDuty\":10}"},
-                {"班委担当", "担任班委职务，认真为班级服务", "medal-1st", "BRONZE",
-                        "COMMITTEE", "{}"},
-                {"连续全勤", "连续 4 周没有迟到、缺勤记录", "sun", "BRONZE",
-                        "CONTINUOUS_ATTENDANCE", "{\"weeks\":4}"},
-                {"大满贯", "集齐本学期全部启用的自动成就", "trophy", "PLATINUM",
-                        "COLLECTOR", "{}"},
+        if (count("SELECT COUNT(*) FROM achievement_def WHERE user_id=0") == 0) {
+            // 每行：名称, 描述, 图标, 入门档, 规则类型, 规则参数JSON, 是否可进阶
+            Object[][] defs = {
+                    {"全勤之星", "本学期无迟到、无缺勤、无请假记录，全勤到校", "check", "SILVER",
+                            "PERFECT_ATTENDANCE", "{\"allowLeave\":false}", 0},
+                    {"作业全勤", "本学期作业全部按时上交，没有未交记录", "books", "SILVER",
+                            "PERFECT_HOMEWORK", "{}", 0},
+                    {"纪律标兵", "本学期没有课堂违纪记录，自律守纪", "shield", "SILVER",
+                            "PERFECT_DISCIPLINE", "{}", 0},
+                    {"进步之星", "考试班级排名提升：🥉3 名 / 🥈5 名 / 🥇10 名", "rocket", "BRONZE",
+                            "RANK_UP", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":3},{\"tier\":\"SILVER\",\"min\":5},{\"tier\":\"GOLD\",\"min\":10}]}", 1},
+                    {"全科优秀", "最近一次考试所有科目成绩均达到优秀线", "glowing-star", "GOLD",
+                            "ALL_EXCELLENT", "{}", 0},
+                    {"单科状元", "任一科目取得班级最高分（并列均可获得）", "crown", "BRONZE",
+                            "SUBJECT_TOP", "{}", 0},
+                    {"满分达人", "最近一次考试满分科目：🥉1 科 / 🥈2 科 / 🥇3 科（满分线默认 100 分）", "hundred", "BRONZE",
+                            "SCORE_FULL", "{\"fullScore\":100,\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":2},{\"tier\":\"GOLD\",\"min\":3}]}", 1},
+                    {"劳动能手", "参与值日劳动：🥉10 次 / 🥈20 次 / 🥇30 次", "broom", "BRONZE",
+                            "DUTY_COUNT", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":10},{\"tier\":\"SILVER\",\"min\":20},{\"tier\":\"GOLD\",\"min\":30}]}", 1},
+                    {"班委担当", "担任班委职务，认真为班级服务", "medal-1st", "BRONZE",
+                            "COMMITTEE", "{}", 0},
+                    {"连续全勤", "连续全勤：🥉4 周 / 🥈8 周 / 🥇整学期（本学期无迟到无缺勤即得🥇）", "sun", "BRONZE",
+                            "CONTINUOUS_ATTENDANCE", "{\"weeks\":4,\"tiers\":[{\"tier\":\"BRONZE\",\"min\":4},{\"tier\":\"SILVER\",\"min\":8},{\"tier\":\"GOLD\",\"min\":20}]}", 1},
+                    {"大满贯", "集齐本学期全部启用的自动成就；可进阶奖牌全部升档后大满贯同步升档（🥉50/🥈150/🥇300 点）", "trophy", "PLATINUM",
+                            "COLLECTOR", "{}", 0},
+            };
+            for (Object[] d : defs) {
+                jdbc.update("INSERT INTO achievement_def(user_id,name,description,icon,tier,kind,rule_type,rule_params,enabled,builtin,tiered) " +
+                                "VALUES(0,?,?,?,?,'AUTO',?,?,1,1,?)",
+                        d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
+            }
+        }
+        migrateBuiltinAchievements();
+    }
+
+    /**
+     * 内置成就进阶版迁移与新播种（幂等，老库重启即生效）：
+     * (a) 4 条老内置按 rule_type 升级为可进阶（tiered=1、入门档 BRONZE、三档阈值与描述）；
+     * (b) 新增 5 条宠物/排名联动 AUTO；(c) 新增 8 条手动模板（kind=MANUAL，不扫描不进大满贯）。
+     */
+    private void migrateBuiltinAchievements() {
+        // (a) 4 条可进阶：按 rule_type 定位 UPDATE，内容与新库播种一致，重复执行结果不变
+        Object[][] tiered = {
+                {"RANK_UP", "考试班级排名提升：🥉3 名 / 🥈5 名 / 🥇10 名",
+                        "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":3},{\"tier\":\"SILVER\",\"min\":5},{\"tier\":\"GOLD\",\"min\":10}]}"},
+                {"SCORE_FULL", "最近一次考试满分科目：🥉1 科 / 🥈2 科 / 🥇3 科（满分线默认 100 分）",
+                        "{\"fullScore\":100,\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":2},{\"tier\":\"GOLD\",\"min\":3}]}"},
+                {"DUTY_COUNT", "参与值日劳动：🥉10 次 / 🥈20 次 / 🥇30 次",
+                        "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":10},{\"tier\":\"SILVER\",\"min\":20},{\"tier\":\"GOLD\",\"min\":30}]}"},
+                {"CONTINUOUS_ATTENDANCE", "连续全勤：🥉4 周 / 🥈8 周 / 🥇整学期（本学期无迟到无缺勤即得🥇）",
+                        "{\"weeks\":4,\"tiers\":[{\"tier\":\"BRONZE\",\"min\":4},{\"tier\":\"SILVER\",\"min\":8},{\"tier\":\"GOLD\",\"min\":20}]}"},
         };
-        for (Object[] d : defs) {
-            jdbc.update("INSERT INTO achievement_def(user_id,name,description,icon,tier,kind,rule_type,rule_params,enabled,builtin) " +
-                            "VALUES(0,?,?,?,?,'AUTO',?,?,1,1)",
-                    d[0], d[1], d[2], d[3], d[4], d[5]);
+        for (Object[] t : tiered) {
+            jdbc.update("UPDATE achievement_def SET tiered=1, tier='BRONZE', description=?, rule_params=? " +
+                    "WHERE user_id=0 AND rule_type=?", t[1], t[2], t[0]);
+        }
+        // (b)+(c) 新增内置：按 name 幂等 INSERT。每行：名称, 描述, 图标, 等级, kind, rule_type, rule_paramsJSON, tiered
+        Object[][] extras = {
+                // 宠物联动 AUTO
+                {"萌宠相伴", "已领养班级宠物，有萌宠陪伴成长", "sparkles", "BRONZE", "AUTO",
+                        "PET_ADOPTED", "{}", 0},
+                {"萌宠成长", "宠物成长到：🥉Lv.3 / 🥈Lv.4 / 🥇Lv.5（毕业后等级重置不降级，保留最高档）", "star", "BRONZE",
+                        "AUTO", "PET_LEVEL", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":3},{\"tier\":\"SILVER\",\"min\":4},{\"tier\":\"GOLD\",\"min\":5}]}", 1},
+                {"毕业典礼", "本学期宠物毕业次数：🥉1 次 / 🥈2 次 / 🥇3 次", "grad-cap", "BRONZE",
+                        "AUTO", "PET_GRADUATE", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":2},{\"tier\":\"GOLD\",\"min\":3}]}", 1},
+                {"小店达人", "本学期小店兑换次数：🥉1 次 / 🥈3 次 / 🥇5 次", "gem", "BRONZE",
+                        "AUTO", "PET_SHOP", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":3},{\"tier\":\"GOLD\",\"min\":5}]}", 1},
+                {"成绩前列", "最近一次考试总分排名：🥉前 10 / 🥈前 5 / 🥇前 3（并列同名次）", "medal-1st", "BRONZE",
+                        "AUTO", "RANK_TOP", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":10},{\"tier\":\"SILVER\",\"min\":5},{\"tier\":\"GOLD\",\"min\":3}]}", 1},
+                // 手动模板 MANUAL（开箱即授，不扫描、不进大满贯）
+                {"体育之星", "体育表现突出：校运会/体育课/体育竞赛获奖", "sports-medal", "SILVER",
+                        "MANUAL", null, null, 0},
+                {"艺术之星", "艺术方面有特长：绘画/书法/舞蹈等表演或获奖", "party", "SILVER",
+                        "MANUAL", null, null, 0},
+                {"助人为乐", "主动帮助同学、热心服务集体", "glowing-star", "SILVER",
+                        "MANUAL", null, null, 0},
+                {"科技小达人", "科技/编程/科学实验等方面表现优异", "rocket", "BRONZE",
+                        "MANUAL", null, null, 0},
+                {"音乐之星", "音乐方面有特长：歌唱/乐器/文艺汇演表现", "bell", "BRONZE",
+                        "MANUAL", null, null, 0},
+                {"文明礼仪", "言行文明、礼貌待人，文明礼仪标兵", "sparkles", "BRONZE",
+                        "MANUAL", null, null, 0},
+                {"阅读之星", "坚持课外阅读，阅读量领先", "memo", "BRONZE",
+                        "MANUAL", null, null, 0},
+                {"演讲达人", "演讲/朗诵/主持表现自信出色", "pencil", "BRONZE",
+                        "MANUAL", null, null, 0},
+        };
+        for (Object[] e : extras) {
+            Integer n = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM achievement_def WHERE user_id=0 AND name=?", Integer.class, e[0]);
+            if (n != null && n > 0) continue;
+            jdbc.update("INSERT INTO achievement_def(user_id,name,description,icon,tier,kind,rule_type,rule_params,enabled,builtin,tiered) " +
+                            "VALUES(0,?,?,?,?,?,?,?,1,1,?)",
+                    e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
         }
     }
 

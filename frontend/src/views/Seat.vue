@@ -69,6 +69,11 @@
           <span v-if="disp.fields.stuNo && s.stuNo" class="seat-stuno">{{ s.stuNo }}</span>
           <!-- 宠物与天气特效（简易模式整块隐藏：img/☁️❄️🌈光环✨🩹🎓/飘字 全在其内） -->
           <div v-if="!disp.simple" class="seat-pet">
+            <!-- 本学期 top3 奖牌（按有效点数降序；简易模式/关闭开关/打印均不显示） -->
+            <div v-if="disp.fields.medal && seatMedalsOf(s.studentId).length" class="seat-medals">
+              <BadgeIcon v-for="(m, mi) in seatMedalsOf(s.studentId)" :key="mi"
+                :icon="m.icon" :tier="m.tier" :earned="true" :animate="false" :size="20" :name="m.name" />
+            </div>
             <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
             <span v-if="petOf(s)?.dizzy" class="wx-cloud">☁️<i class="wx-drop">💧</i></span>
             <template v-if="petOf(s)?.frozen">
@@ -418,6 +423,7 @@
           <el-checkbox value="gender">性别底色</el-checkbox>
           <el-checkbox value="lv">Lv 徽章</el-checkbox>
           <el-checkbox value="badge">毕业🎓角标</el-checkbox>
+          <el-checkbox value="medal">🏅 奖牌</el-checkbox>
           <el-checkbox value="colLabel">行列标签</el-checkbox>
           <el-checkbox value="unseated">未排座学生区</el-checkbox>
         </el-checkbox-group>
@@ -529,6 +535,7 @@ import { usePets, PET_CATS } from '../composables/usePets'
 import { onRemoteCmd } from '../composables/useRemote'
 import EvolutionShow from '../components/EvolutionShow.vue'
 import SkinMakerDlg from '../components/SkinMakerDlg.vue'
+import BadgeIcon from '../components/BadgeIcon.vue'
 
 /** 评价项分类（固定四个 tab） */
 const CATS = PET_CATS
@@ -545,7 +552,7 @@ const SKIN_STAGES = [
 function dispDefault() {
   return {
     simple: 0,
-    fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, colLabel: 1, unseated: 1 },
+    fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
     namePos: 'v-left', // v-left 竖排贴左 | h-center 横排居中 | h-bottom 横排贴底
     print: { flip: 0, mono: 1, withUnseated: 1 }
   }
@@ -554,7 +561,7 @@ const disp = reactive(dispDefault())
 const seatCfgDlg = ref(false)
 const printDlg = ref(false)
 /** 字段勾选的 key 顺序（el-checkbox-group 用） */
-const FIELD_KEYS = ['stuNo', 'gender', 'lv', 'badge', 'colLabel', 'unseated']
+const FIELD_KEYS = ['stuNo', 'gender', 'lv', 'badge', 'medal', 'colLabel', 'unseated']
 /** el-checkbox-group 双向绑定：勾选字段 key 数组 ↔ disp.fields 0/1 */
 const fieldChecks = computed({
   get: () => FIELD_KEYS.filter(k => disp.fields[k]),
@@ -725,10 +732,23 @@ const {
 let offRemote = null
 onMounted(() => {
   offRemote = onRemoteCmd((action) => {
-    if (action === 'pets.changed') loadPets()
+    if (action === 'pets.changed') { loadPets(); loadSeatMedals() }
   })
+  loadSeatMedals()
 })
 onUnmounted(() => offRemote?.())
+
+// ==================== 座位奖牌（本学期 top3，GET /achievement/seat-medals，接口内部先静默扫描） ====================
+/** sid → 奖牌数组（[{icon,name,tier}]，已按有效点数降序取前 3） */
+const seatMedalsMap = ref({})
+/** 拉取全班座位奖牌；失败静默（奖牌为装饰，不影响座位主功能） */
+async function loadSeatMedals() {
+  try { seatMedalsMap.value = await http.get('/achievement/seat-medals') || {} } catch { /* 静默 */ }
+}
+/** 取某生座位奖牌（无数据返回空数组） */
+function seatMedalsOf(sid) {
+  return seatMedalsMap.value[sid] || []
+}
 
 /** 取座位上学生对应的宠物状态（/pet/pets 返回全班，含未领养） */
 function petOf(s) {
@@ -843,6 +863,11 @@ function onSeatUp(e) {
 /* 关闭性别底色：统一白底灰边（座位格） */
 .seat.no-gender { background: #fff; border: 2px solid #e3e6f0; color: #5a5f6e; }
 .seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
+/* 座位顶部 top3 奖牌：横排居中挂宠物上方；pointer-events:none 不挡拖拽，打印区不渲染故不打印 */
+.seat-medals {
+  position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; z-index: 3; pointer-events: none;
+}
 .seat-pet-img { width: 96px; height: 96px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }

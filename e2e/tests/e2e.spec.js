@@ -149,7 +149,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         await request.post(API + '/seat/config', { headers: authHeader(), data: seatConfigBak })
       }
       const dispDefault = JSON.stringify({
-        simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, colLabel: 1, unseated: 1 },
+        simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
         namePos: 'v-left', print: { flip: 0, mono: 1, withUnseated: 1 }
       })
       await request.put(API + '/settings/seat-display', {
@@ -693,6 +693,26 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(Array.isArray(s1.data.newAwards)).toBe(true)
       const s2 = await (await request.post(API + '/achievement/scan', { headers: authHeader() })).json()
       expect(s2.data.count).toBe(0)
+      // newAwards 元素携带 tier（持有档）与 kind（award 新获得 / upgrade 升档）
+      for (const a of s1.data.newAwards || []) {
+        expect(['BRONZE', 'SILVER', 'GOLD', 'PLATINUM']).toContain(a.tier)
+        expect(['award', 'upgrade']).toContain(a.kind)
+      }
+
+      // 座位奖牌接口：内部先静默扫描；返回 sid → 奖牌数组，每生 ≤3 枚，元素含 icon/name/tier
+      const sm = await (await request.get(API + '/achievement/seat-medals', { headers: authHeader() })).json()
+      expect(sm.code).toBe(200)
+      expect(typeof sm.data === 'object' && sm.data !== null).toBe(true)
+      expect((sm.data[testStudentId] || []).length).toBeGreaterThanOrEqual(1) // 刚授予的 GOLD 自定义成就必在
+      for (const list of Object.values(sm.data)) {
+        expect(Array.isArray(list)).toBe(true)
+        expect(list.length).toBeLessThanOrEqual(3)
+        for (const m of list) {
+          expect(m.icon).toBeTruthy()
+          expect(m.name).toBeTruthy()
+          expect(['BRONZE', 'SILVER', 'GOLD', 'PLATINUM']).toContain(m.tier)
+        }
+      }
 
       // 撤销 → 徽章墙变为未获得
       const defs = await (await request.get(API + '/achievement/defs', { headers: authHeader() })).json()
@@ -712,6 +732,12 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(dl.code).toBe(200)
       const defs2 = await (await request.get(API + '/achievement/defs', { headers: authHeader() })).json()
       expect(defs2.data.some(d => d.id === defId)).toBe(false)
+      // 内置新增：8 条 MANUAL 模板（builtin=1，afterAll 清理不删）+ 可进阶 AUTO 带三档 tiers
+      expect(defs2.data.some(d => d.builtin === 1 && d.name === '体育之星')).toBe(true)
+      const rankUpDef = defs2.data.find(d => d.rule_type === 'RANK_UP')
+      expect(rankUpDef).toBeTruthy()
+      expect(rankUpDef.tiered).toBe(1)
+      expect(JSON.parse(rankUpDef.rule_params).tiers).toHaveLength(3)
 
       // --- UI 链路：成就榜视图 ---
       await page.goto('/roster')
@@ -1237,6 +1263,25 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.getByRole('button', { name: '座位设置' }).click()
       const cfgDlg = page.locator('.el-dialog', { hasText: '座位设置' }).last()
       await expect(cfgDlg).toBeVisible()
+
+      // 14.2b 🏅奖牌开关：默认勾选；座位卡顶部挂本学期 top3（每生 ≤3 枚）；取消消失、重勾恢复
+      const medalCheck = cfgDlg.locator('.el-checkbox', { hasText: '奖牌' })
+      await expect(medalCheck).toBeVisible()
+      await expect(medalCheck.locator('.el-checkbox__input')).toHaveClass(/is-checked/)
+      await expect.poll(async () =>
+        await page.locator('.seat .seat-medals').count(), { timeout: 10000 }).toBeGreaterThanOrEqual(1)
+      await expect.poll(async () => {
+        const counts = await page.locator('.seat .seat-medals')
+          .evaluateAll(els => els.map(e => e.childElementCount))
+        return counts.every(c => c <= 3)
+      }, { timeout: 5000 }).toBe(true)
+      await medalCheck.click() // 取消勾选 → 奖牌整块消失
+      await expect.poll(async () =>
+        await page.locator('.seat .seat-medals').count(), { timeout: 8000 }).toBe(0)
+      await medalCheck.click() // 重勾 → 恢复
+      await expect.poll(async () =>
+        await page.locator('.seat .seat-medals').count(), { timeout: 8000 }).toBeGreaterThanOrEqual(1)
+
       const rowsInput = cfgDlg.locator('.el-input-number').first()
       await rowsInput.locator('input').fill('5')
       await rowsInput.locator('input').blur()
@@ -1261,6 +1306,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await cfgDlg.locator('.el-switch').first().click()
       await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 8000 }).toBe(0)
       await expect(page.locator('.seat .wx-aura')).toHaveCount(0)
+      await expect.poll(async () => page.locator('.seat .seat-medals').count(), { timeout: 8000 }).toBe(0) // 简易模式奖牌随宠物块隐藏
       await expect(page.locator('.seat.h-center').first()).toBeVisible()
       // 未排座区（若有人）：纯名单网格、无 img、无领养按钮
       const unseatWrap = page.locator('.unseat-wrap')
@@ -1287,6 +1333,9 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const pDlg = page.locator('.el-dialog', { hasText: '打印座次表' }).last()
       await expect(pDlg).toBeVisible()
       await expect(page.locator('.seat-print-area.mono')).toHaveCount(1)
+      // 奖牌仅屏幕展示：打印区不含奖牌
+      await expect(page.locator('.seat-print-area .seat-medals')).toHaveCount(0)
+      await expect(page.locator('.seat-print-area .badge-icon')).toHaveCount(0)
       // 预览缩略：行号 3 个 + 两头列号 4×2=8 个；格内为真实学生姓名（不再是全"张三"）
       await expect(pDlg.locator('.pv-row')).toHaveCount(3)
       await expect(pDlg.locator('.pv-col')).toHaveCount(8)

@@ -160,11 +160,14 @@
               <div class="aw-total">🏅 {{ wall.stats.total }} <small>枚</small></div>
               <div class="aw-points">⭐ {{ wall.stats.points }} <small>成就点</small></div>
               <div class="aw-tiers">
-                <span><i class="aw-dot" style="background:#c07a3e"></i>铜 {{ wall.stats.bronze }}</span>
-                <span><i class="aw-dot" style="background:#9a93b4"></i>银 {{ wall.stats.silver }}</span>
-                <span><i class="aw-dot" style="background:#e8a526"></i>金 {{ wall.stats.gold }}</span>
+                <span><i class="aw-dot" style="background:#a8642f"></i>铜 {{ wall.stats.bronze }}</span>
+                <span><i class="aw-dot" style="background:#9aa6b8"></i>银 {{ wall.stats.silver }}</span>
+                <span><i class="aw-dot" style="background:#f0b400"></i>金 {{ wall.stats.gold }}</span>
                 <span><i class="aw-dot" style="background:#5fb5e8"></i>白金 {{ wall.stats.platinum }}</span>
               </div>
+            </div>
+            <div class="aw-legend">
+              <span>🥉 入门达成</span><span>🥈 稳定优秀</span><span>🥇 卓越标杆</span><span>🏆 大满贯</span>
             </div>
 
             <h4>📦 本学期（{{ wall.termStart }} ~ {{ wall.termEnd }}）</h4>
@@ -179,9 +182,14 @@
                 <div class="aw-pop">
                   <b>{{ b.name }}</b>
                   <p class="muted" style="margin:6px 0">{{ b.description || '老师自定义成就' }}</p>
+                  <p v-if="b.tiered && b.tiers && b.tiers.length" class="aw-tier-steps">
+                    <span v-for="t in b.tiers" :key="t.tier"
+                      :class="{ done: b.earned && tierRank(b.tier) >= tierRank(t.tier) }">{{ tierStepLabel(b.ruleType, t) }}</span>
+                  </p>
                   <p v-if="b.earned" style="margin:0;color:#2e8b57">✅ {{ b.awardedAt }} 获得<span v-if="b.remark">（{{ b.remark }}）</span></p>
                   <p v-else-if="b.progress" style="margin:0;color:#b07a3e">📊 {{ b.progress }}</p>
                   <p v-else-if="b.kind === 'MANUAL'" class="muted" style="margin:0">由老师手动授予</p>
+                  <p v-if="b.earned && b.progress" style="margin:4px 0 0;color:#b07a3e">📊 {{ b.progress }}</p>
                 </div>
               </el-popover>
             </div>
@@ -353,19 +361,44 @@ async function onProfileTab(name) {
   }
 }
 
-/** 新颁发成就合并弹庆祝通知（按成就分组，最多列 5 条） */
+/** 新颁发/升级成就弹庆祝通知（每条一行，最多 5 条；区分新获得与升级、大满贯突出） */
+function awardLine(a) {
+  const emoji = { BRONZE: '🥉', SILVER: '🥈', GOLD: '🥇', PLATINUM: '🏆' }[a.tier] || '🏅'
+  const tierName = { BRONZE: '铜牌', SILVER: '银牌', GOLD: '金牌', PLATINUM: '白金' }[a.tier] || ''
+  if (a.defName === '大满贯') {
+    if (a.kind === 'upgrade') {
+      const pts = { BRONZE: 50, SILVER: 150, GOLD: 300 }[a.tier] || ''
+      return `🏆 ${a.name} 的大满贯升至${emoji}${tierName}（${pts} 点）！`
+    }
+    return `🏆 ${a.name} 集齐全部成就，获得大满贯${emoji}！`
+  }
+  if (a.kind === 'upgrade') return `⬆️ ${a.name} 的「${a.defName}」升级为${emoji}${tierName}！`
+  return `🎉 ${a.name} 获得「${a.defName}」${emoji}`
+}
 function notifyAwards(list) {
-  const byDef = {}
-  list.forEach(a => { (byDef[a.defName] ||= []).push(a.name) })
-  const lines = Object.entries(byDef).slice(0, 5).map(([def, names]) => {
-    const shown = names.slice(0, 3).join('、')
-    return `🏅 ${shown}${names.length > 3 ? ` 等 ${names.length} 人` : ''} 获得「${def}」`
-  })
+  const lines = list.slice(0, 5).map(awardLine)
   ElNotification({
-    title: `🎉 新成就解锁（共 ${list.length} 枚）`,
+    title: `🎉 成就播报（共 ${list.length} 条）`,
     message: lines.join('<br>'),
     dangerouslyUseHTMLString: true, duration: 8000, type: 'success'
   })
+}
+
+/** 档位序数（高低比较）；徽章悬停卡三档门槛高亮当前持有档 */
+const TIER_RANK = { BRONZE: 1, SILVER: 2, GOLD: 3, PLATINUM: 4 }
+const tierRank = t => TIER_RANK[t] || 0
+/** 三档门槛标签：按规则类型带单位（次/名/科/级/周/前N） */
+function tierStepLabel(ruleType, t) {
+  const e = { BRONZE: '🥉', SILVER: '🥈', GOLD: '🥇' }[t.tier] || ''
+  const v = t.min
+  switch (ruleType) {
+    case 'RANK_TOP': return `${e}前${v}`
+    case 'PET_LEVEL': return `${e}Lv.${v}`
+    case 'RANK_UP': return `${e}升${v}名`
+    case 'SCORE_FULL': return `${e}${v}科满分`
+    case 'CONTINUOUS_ATTENDANCE': return v >= 20 ? `${e}整学期` : `${e}${v}周`
+    default: return `${e}${v}次`
+  }
 }
 
 /** 档案数字卡素材（后端缺失字段兜底 0） */
@@ -564,4 +597,15 @@ h4 { margin: 18px 0 8px; color: #5a5f72; }
 .aw-cell.locked .aw-bname { color: #b0aec0; }
 .aw-pop b { color: #4a4455; }
 :deep(.aw-pop .muted) { font-size: 12px; line-height: 1.5; }
+/* 等级图例：铜入门/银优秀/金标杆/大满贯 */
+.aw-legend {
+  display: flex; gap: 14px; margin: 8px 2px 4px;
+  font-size: 12px; color: #8a84a0;
+}
+/* 悬停卡三档门槛：已达档高亮 */
+.aw-tier-steps { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.aw-tier-steps span {
+  font-size: 12px; color: #a8a4b8; background: #f4f2f8; border-radius: 8px; padding: 1px 7px;
+}
+.aw-tier-steps span.done { color: #8a5a18; background: #fff1d6; font-weight: 700; }
 </style>
