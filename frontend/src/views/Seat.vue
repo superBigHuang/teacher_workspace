@@ -851,7 +851,7 @@ function onSeatUp(e) {
 .seat.h-center .seat-name { font-size: 15px; line-height: 1.25; }
 .seat.h-center .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
 .seat.h-center .seat-pet { order: 2; }
-.seat.h-center .seat-pet-img { width: 78px; height: 78px; }
+.seat.h-center .seat-pet-img { width: 92px; height: 92px; }
 /* h-bottom 横排贴底：宠物在上，姓名/学号贴卡片底部 */
 .seat.h-bottom { flex-direction: column; }
 .seat.h-bottom .seat-pet { order: 0; }
@@ -859,7 +859,7 @@ function onSeatUp(e) {
 .seat.h-bottom .seat-stuno { position: static; writing-mode: horizontal-tb; order: 1; }
 .seat.h-bottom .seat-name { font-size: 14px; line-height: 1.25; margin-top: auto; }
 .seat.h-bottom .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
-.seat.h-bottom .seat-pet-img { width: 86px; height: 86px; }
+.seat.h-bottom .seat-pet-img { width: 100px; height: 100px; }
 /* 关闭性别底色：统一白底灰边（座位格） */
 .seat.no-gender { background: #fff; border: 2px solid #e3e6f0; color: #5a5f6e; }
 .seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
@@ -870,7 +870,7 @@ function onSeatUp(e) {
   display: flex; gap: 2px; z-index: 1; pointer-events: none;
 }
 /* 宠物为座位卡最上层（z-index:4）：放大显示，可遮挡奖牌与姓名；状态标记/飘字仍在其上（z-index:5） */
-.seat-pet-img { position: relative; z-index: 4; width: 112px; height: 112px; object-fit: contain; }
+.seat-pet-img { position: relative; z-index: 4; width: 128px; height: 128px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
 .seat-pet-img.frozen { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 6px rgba(120,190,255,.8)); }
@@ -1152,7 +1152,7 @@ function onSeatUp(e) {
 }
 /* Lv4/5 脚下 conic 光环：Lv4 8s 淡，Lv5 5s 亮 */
 .wx-aura {
-  position: absolute; bottom: 0; left: 50%; width: 122px; height: 28px;
+  position: absolute; bottom: 0; left: 50%; width: 138px; height: 30px;
   transform: translateX(-50%); border-radius: 50%; pointer-events: none; z-index: 0;
   opacity: .25; filter: blur(5px);
 }
@@ -1162,7 +1162,7 @@ function onSeatUp(e) {
     transparent 130deg, transparent 220deg, rgba(255,217,138,.7) 280deg, transparent 340deg);
   animation: aura-spin 8s linear infinite;
 }
-.wx-aura.lv5 { opacity: .5; width: 130px; }
+.wx-aura.lv5 { opacity: .5; width: 146px; }
 .wx-aura.lv5 .aura-rot { animation-duration: 5s; }
 @keyframes aura-spin { to { transform: rotate(360deg); } }
 /* Lv5 周身闪点（::before 承载 ✨，错峰由 sparkStyle 内联） */
