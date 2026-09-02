@@ -23,7 +23,8 @@ let firstStudent = ''    // 第一个真实学生姓名，用于搜索
 let testStudentId = null // 临时测试学生 id
 let testStudentId2 = null // 临时测试学生2（自创皮肤领养验证用）
 let seatConfigBak = null  // 座次表 v2：admin 真实座次布局备份（rows/cols/aisles），afterAll 恢复
-let seatDisplayBak = ''   // 座次表 v2：admin 真实显示偏好备份（seat_display 原始 JSON 字符串），afterAll 恢复
+// 注：显示偏好 seat_display 不做备份/恢复——步骤 14 会逐项翻转，afterAll 始终写回默认 JSON，
+// 避免"中途失败时备份已带 flip=1"导致污染随每次运行自我延续
 
 const nav = (page, name) => page.locator('.nav-item', { hasText: name }).first()
 const authHeader = () => ({ Authorization: 'Bearer ' + token })
@@ -69,8 +70,6 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     // 座次表 v2：备份 admin 真实座次布局与显示偏好（步骤 14 会改，afterAll 必须恢复）
     const cfg = (await (await request.get(API + '/seat/config', { headers: authHeader() })).json()).data
     seatConfigBak = { rows: cfg.rows, cols: cfg.cols, aisles: cfg.aisles || [] }
-    const prof = (await (await request.get(API + '/settings/profile', { headers: authHeader() })).json()).data
-    seatDisplayBak = prof.seat_display || ''
   })
 
   test.afterAll(async ({ request }) => {
@@ -144,7 +143,8 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       }
     } catch (e) { /* 忽略 */ }
     try {
-      // 座次表 v2：恢复 admin 真实布局与显示偏好（原无偏好时写回默认 JSON，界面与现状一致）
+      // 座次表 v2：恢复 admin 真实布局；显示偏好始终写回默认 JSON（flip:simple 等必须归零，
+      // 不能恢复"备份值"——备份可能在步骤 14 中途失败时已带 flip=1，会随每次运行自我延续污染）
       if (seatConfigBak) {
         await request.post(API + '/seat/config', { headers: authHeader(), data: seatConfigBak })
       }
@@ -153,7 +153,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         namePos: 'v-left', print: { flip: 0, mono: 1, withUnseated: 1 }
       })
       await request.put(API + '/settings/seat-display', {
-        headers: authHeader(), data: { v: seatDisplayBak || dispDefault }
+        headers: authHeader(), data: { v: dispDefault }
       })
     } catch (e) { /* 忽略 */ }
   })
@@ -1287,8 +1287,24 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const pDlg = page.locator('.el-dialog', { hasText: '打印座次表' }).last()
       await expect(pDlg).toBeVisible()
       await expect(page.locator('.seat-print-area.mono')).toHaveCount(1)
-      await pDlg.locator('.el-switch').first().click()
-      await expect(page.locator('.pv-board.flip')).toBeVisible({ timeout: 5000 })
+      // 预览缩略：行号 3 个 + 两头列号 4×2=8 个；格内为真实学生姓名（不再是全"张三"）
+      await expect(pDlg.locator('.pv-row')).toHaveCount(3)
+      await expect(pDlg.locator('.pv-col')).toHaveCount(8)
+      await expect.poll(async () => {
+        const names = await pDlg.locator('.pv-cell:not(.empty)').allTextContents()
+        return names.some(n => n.trim() && n.trim() !== '张三')
+      }, { timeout: 5000 }).toBeTruthy()
+      // 打印区列号两头都印（讲台侧 + 远侧），总数远多于单列列号
+      await expect.poll(async () => page.locator('.seat-print-area .col-label').count(), { timeout: 5000 })
+        .toBeGreaterThan(10)
+      // 倒转开关：按行标签精确定位；先确保起始为"关"（is-checked）再点一次变"开"，
+      // 不依赖偏好初始态——残留 flip=1 时单次点击会取反为关，导致 .flip 断言误失败
+      const flipSwitch = pDlg.locator('.cfg-row', { hasText: '倒转' }).locator('.el-switch')
+      if (await flipSwitch.evaluate(el => el.classList.contains('is-checked'))) {
+        await flipSwitch.click()
+      }
+      await flipSwitch.click()
+      await expect(pDlg.locator('.pv-board.flip')).toBeVisible({ timeout: 5000 })
       await expect(page.locator('.seat-print-area.flip')).toHaveCount(1)
 
       // 14.7 打印媒体：body.seat-printing + print 媒体下只显示打印区；空位 visibility:hidden 保网格

@@ -449,12 +449,24 @@
         </div>
       </div>
       <div class="print-preview">
-        <!-- 迷你示意棋盘：粉色讲台条 + 3×4 灰格；flip 时整体 rotate(180deg)，讲台条转到下方 -->
-        <div class="pv-board" :class="{ flip: disp.print.flip }">
-          <div class="pv-podium">讲台</div>
-          <div class="pv-grid">
-            <div v-for="n in 12" :key="'pv'+n" class="pv-cell">张三</div>
-          </div>
+        <!-- 缩略预览：取前 3 排×4 列真实座位姓名（不画全 56 格），带行号 + 两头列号 + 讲台条；
+             flip 时整体 rotate(180deg)（讲台转到下方），格/标签文字各自转回正立 -->
+        <div class="pv-board" :class="{ flip: disp.print.flip }" :style="pvGridStyle">
+          <!-- 讲台条（非翻转在顶部；翻转后到下方近老师侧） -->
+          <div class="pv-podium" :style="{ gridRow: 1, gridColumn: '1 / -1' }">🏫 讲台</div>
+          <!-- 讲台侧列号 -->
+          <span v-for="c in PV_COLS" :key="'pvc'+c" class="pv-col"
+                :style="{ gridRow: 2, gridColumn: c + 1 }">第{{ c }}列</span>
+          <!-- 行号（左侧竖排） -->
+          <span v-for="r in PV_ROWS" :key="'pvr'+r" class="pv-row"
+                :style="{ gridRow: r + 2, gridColumn: 1 }">{{ r }}排</span>
+          <!-- 真实座位格（空位留白框） -->
+          <div v-for="s in pvSeats" :key="'pvs'+s.row+'-'+s.col" class="pv-cell"
+               :class="{ empty: !s.studentId }"
+               :style="{ gridRow: s.row + 2, gridColumn: s.col + 1 }">{{ s.name || '' }}</div>
+          <!-- 远侧列号 -->
+          <span v-for="c in PV_COLS" :key="'pvcb'+c" class="pv-col"
+                :style="{ gridRow: PV_ROWS + 3, gridColumn: c + 1 }">第{{ c }}列</span>
         </div>
       </div>
       <template #footer>
@@ -463,17 +475,24 @@
       </template>
     </el-dialog>
 
-    <!-- 打印区：屏幕隐藏，仅 body.seat-printing + 打印媒体显示；只打姓名(+学号)，空位 visibility:hidden 保网格 -->
+    <!-- 打印区：屏幕隐藏，仅 body.seat-printing + 打印媒体显示；只打姓名(+学号)，空位 visibility:hidden 保网格。
+         列号两头都印（讲台侧 gridRow=1 + 远侧 gridRow=rows+2），倒转后老师从哪头看都有列号对照 -->
     <div class="seat-print-area" :class="{ flip: disp.print.flip, mono: disp.print.mono }">
       <div class="print-turn">
         <div class="print-podium">🏫 讲台</div>
-        <div class="print-board" :style="boardGridStyle">
+        <div class="print-board" :style="printBoardStyle">
           <div class="board-corner"></div>
           <template v-if="disp.fields.colLabel">
+            <!-- 讲台侧列号（gridRow=1，紧挨讲台条） -->
             <div v-for="c in cols" :key="'pcol'+c" class="col-label"
                  :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
             <div v-for="aisleCol in aisleDisplayColumns" :key="'pal'+aisleCol" class="col-label aisle-label"
                  :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
+            <!-- 远侧列号（gridRow=rows+2，棋盘另一头） -->
+            <div v-for="c in cols" :key="'pcolb'+c" class="col-label"
+                 :style="{ gridRow: rows + 2, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
+            <div v-for="aisleCol in aisleDisplayColumns" :key="'palb'+aisleCol" class="col-label aisle-label"
+                 :style="{ gridRow: rows + 2, gridColumn: aisleCol + 1 }">过道</div>
             <div v-for="r in rows" :key="'prow'+r" class="row-label"
                  :style="{ gridRow: r + 1, gridColumn: 1 }">第{{ r }}排</div>
           </template>
@@ -597,6 +616,20 @@ const totalDisplayCols = computed(() => cols.value + aisles.value.length)
 const boardGridStyle = computed(() => ({
   gridTemplateColumns: `${disp.fields.colLabel ? 40 : 0}px repeat(${totalDisplayCols.value}, minmax(0, 1fr))`,
   gridTemplateRows: `${disp.fields.colLabel ? 30 : 0}px repeat(${rows.value}, auto)`
+}))
+// 打印棋盘网格：比屏幕多一行远侧列号（列号讲台侧/远侧两头都印，倒转后老师从哪头看都有列号）
+const printBoardStyle = computed(() => ({
+  gridTemplateColumns: `${disp.fields.colLabel ? 40 : 0}px repeat(${totalDisplayCols.value}, minmax(0, 1fr))`,
+  gridTemplateRows: `${disp.fields.colLabel ? 30 : 0}px repeat(${rows.value}, auto) ${disp.fields.colLabel ? 24 : 0}px`
+}))
+// 打印预览缩略范围：只示意前 3 排 × 前 4 列（不画全 56 格），姓名取真实座位数据
+const PV_ROWS = 3
+const PV_COLS = 4
+const pvSeats = computed(() => seats.value.filter(s => s.row <= PV_ROWS && s.col <= PV_COLS))
+// 预览迷你网格：行号列 16px + 4 座位列；行序=讲台 18 + 讲台侧列号 13 + 3 座位行 26 + 远侧列号 13
+const pvGridStyle = computed(() => ({
+  gridTemplateColumns: `16px repeat(${PV_COLS}, minmax(0, 1fr))`,
+  gridTemplateRows: `18px 13px repeat(${PV_ROWS}, 26px) 13px`
 }))
 // 过道 gutter 所在显示列
 const aisleDisplayColumns = computed(() =>
@@ -1194,23 +1227,29 @@ function onSeatUp(e) {
 /* ===== 🖨 打印弹窗：选项 + 迷你预览（倒转时简图 rotate 180°） ===== */
 .print-opts { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
 .print-opts .cfg-row { justify-content: space-between; margin-bottom: 10px; }
-.print-preview { background: #f6f7fb; border-radius: 12px; padding: 18px 22px; }
-.pv-board { transition: transform .4s ease; }
+.print-preview { background: #f6f7fb; border-radius: 12px; padding: 16px 20px; }
+.pv-board { display: grid; gap: 4px; transition: transform .4s ease; }
 .pv-board.flip { transform: rotate(180deg); }
-/* 简图随翻转旋转，但格内"张三"与讲台条同步反向转回，动画中与终态文字都正立（贴合打印效果） */
-.pv-board .pv-cell,
-.pv-board .pv-podium { transition: transform .4s ease; }
-.pv-board.flip .pv-cell,
-.pv-board.flip .pv-podium { transform: rotate(180deg); }
+/* 翻转时格/讲台/行列标签各自转回 180°，文字保持正立（与打印区 .print-turn 同理） */
+.pv-board .pv-cell, .pv-board .pv-podium, .pv-board .pv-col, .pv-board .pv-row { transition: transform .4s ease; }
+.pv-board.flip .pv-cell, .pv-board.flip .pv-podium,
+.pv-board.flip .pv-col, .pv-board.flip .pv-row { transform: rotate(180deg); }
 .pv-podium {
   background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
-  font-weight: 800; font-size: 12px; padding: 6px; border-radius: 8px; margin-bottom: 8px;
+  font-weight: 800; font-size: 11px; line-height: 18px; border-radius: 6px;
 }
-.pv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pv-col { display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #a08a78; }
+.pv-row {
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 1px;
+  font-size: 9px; font-weight: 700; color: #a08a78;
+}
 .pv-cell {
-  background: #e8eaf2; border: 1px dashed #c8ccda; border-radius: 6px;
-  text-align: center; font-size: 11px; color: #8a8fa3; padding: 9px 0;
+  background: #e8eaf2; border: 1px solid #d4d8e4; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #5a6072; overflow: hidden; white-space: nowrap;
 }
+.pv-cell.empty { background: transparent; border: 1px dashed #d4d8e4; }
 
 /* ===== 打印区（屏幕隐藏由全局 theme.css 控制；此处仅内部样式） ===== */
 /* 倒转（纸平铺讲台、老师低头直接看）：.print-turn 整体转 180° 让讲台条移到近老师侧、
