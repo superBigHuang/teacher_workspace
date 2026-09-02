@@ -12,7 +12,7 @@
         <el-table-column prop="stu_no" label="学号" width="100" />
         <el-table-column prop="student_name" label="学生姓名" width="100" />
         <el-table-column prop="gender" label="性别" width="70" />
-        <el-table-column label="家长信息" min-width="210">
+        <el-table-column label="家长信息" min-width="175">
           <template #default="{ row }">
             <div v-for="(p, i) in row.parents" :key="i" class="parent-info">
               <b>{{ p.relation }}：{{ p.name }}</b>
@@ -20,7 +20,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="address" label="住址" min-width="120" />
+        <el-table-column prop="address" label="住址" min-width="175" />
         <el-table-column label="操作" width="170">
           <template #default="{ row }">
             <div class="op-btns">
