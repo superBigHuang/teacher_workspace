@@ -12,7 +12,7 @@
         <el-table-column prop="stu_no" label="学号" width="100" />
         <el-table-column prop="student_name" label="学生姓名" width="100" />
         <el-table-column prop="gender" label="性别" width="70" />
-        <el-table-column label="家长信息" min-width="280">
+        <el-table-column label="家长信息" min-width="210">
           <template #default="{ row }">
             <div v-for="(p, i) in row.parents" :key="i" class="parent-info">
               <b>{{ p.relation }}：{{ p.name }}</b>
@@ -20,11 +20,13 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="address" label="住址" min-width="140" />
-        <el-table-column label="操作" width="150">
+        <el-table-column prop="address" label="住址" min-width="120" />
+        <el-table-column label="操作" width="170">
           <template #default="{ row }">
-            <el-button size="small" type="primary" plain @click="openEdit(row)">✏️ 编辑</el-button>
-            <el-button size="small" type="success" plain @click="openComm(row)">💬 沟通</el-button>
+            <div class="op-btns">
+              <el-button size="small" type="primary" plain @click="openEdit(row)">✏️ 编辑</el-button>
+              <el-button size="small" type="success" plain @click="openComm(row)">💬 沟通</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -179,6 +181,8 @@ async function delLog(id) {
 .block-title { margin: 0 0 12px; color: #5a5f72; }
 .parent-info { display: flex; align-items: center; gap: 12px; padding: 2px 0; font-size: 14px; }
 .parent-info .phone { margin-left: 6px; }
+.op-btns { display: flex; flex-wrap: nowrap; gap: 6px; }
+.op-btns .el-button { margin-left: 0; }
 h4 { margin: 14px 0 8px; color: #5a5f72; }
 .comm-student { background: #f6f8fc; border-radius: 10px; padding: 10px 14px; margin-bottom: 6px; }
 </style>
