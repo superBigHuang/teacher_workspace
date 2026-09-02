@@ -22,6 +22,8 @@ let students = []        // 真实学生名单（来自 API）
 let firstStudent = ''    // 第一个真实学生姓名，用于搜索
 let testStudentId = null // 临时测试学生 id
 let testStudentId2 = null // 临时测试学生2（自创皮肤领养验证用）
+let seatConfigBak = null  // 座次表 v2：admin 真实座次布局备份（rows/cols/aisles），afterAll 恢复
+let seatDisplayBak = ''   // 座次表 v2：admin 真实显示偏好备份（seat_display 原始 JSON 字符串），afterAll 恢复
 
 const nav = (page, name) => page.locator('.nav-item', { hasText: name }).first()
 const authHeader = () => ({ Authorization: 'Bearer ' + token })
@@ -64,6 +66,11 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     const r = await request.get(API + '/roster/students', { headers: authHeader() })
     students = (await r.json()).data
     firstStudent = students[0]?.name || ''
+    // 座次表 v2：备份 admin 真实座次布局与显示偏好（步骤 14 会改，afterAll 必须恢复）
+    const cfg = (await (await request.get(API + '/seat/config', { headers: authHeader() })).json()).data
+    seatConfigBak = { rows: cfg.rows, cols: cfg.cols, aisles: cfg.aisles || [] }
+    const prof = (await (await request.get(API + '/settings/profile', { headers: authHeader() })).json()).data
+    seatDisplayBak = prof.seat_display || ''
   })
 
   test.afterAll(async ({ request }) => {
@@ -135,6 +142,19 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
           await request.delete(API + '/pet/skin/' + s.id, { headers: authHeader() })
         }
       }
+    } catch (e) { /* 忽略 */ }
+    try {
+      // 座次表 v2：恢复 admin 真实布局与显示偏好（原无偏好时写回默认 JSON，界面与现状一致）
+      if (seatConfigBak) {
+        await request.post(API + '/seat/config', { headers: authHeader(), data: seatConfigBak })
+      }
+      const dispDefault = JSON.stringify({
+        simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, colLabel: 1, unseated: 1 },
+        namePos: 'v-left', print: { flip: 0, mono: 1, withUnseated: 1 }
+      })
+      await request.put(API + '/settings/seat-display', {
+        headers: authHeader(), data: { v: seatDisplayBak || dispDefault }
+      })
     } catch (e) { /* 忽略 */ }
   })
 
@@ -1202,6 +1222,88 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect.poll(async () =>
         (await page.locator('.stat-card .num').nth(0).textContent() || '').trim(), { timeout: 10000 }).toBe('40')
       testStudentId = null
+    })
+
+    // ============ 14. 座次表 v2：设置收纳 · 简易模式 · 名字位置 · 打印 ============
+    await test.step('座次表v2：工具栏瘦身/设置弹窗改布局与过道/简易模式/名字位置/打印倒转黑白/偏好持久化', async () => {
+      await page.goto('/seat')
+      // 14.1 工具栏瘦身：⚙设置/🖨打印 可见，旧的行数/列数/过道控件已移除
+      await expect(page.getByRole('button', { name: '座位设置' })).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('button', { name: '打印' })).toBeVisible()
+      await expect(page.locator('.page-toolbar .el-input-number')).toHaveCount(0)
+      await expect(page.locator('.page-toolbar .el-select')).toHaveCount(0)
+
+      // 14.2 ⚙座位设置弹窗：行数改 5、过道1 切换，棋盘即时变化且持久化
+      await page.getByRole('button', { name: '座位设置' }).click()
+      const cfgDlg = page.locator('.el-dialog', { hasText: '座位设置' }).last()
+      await expect(cfgDlg).toBeVisible()
+      const rowsInput = cfgDlg.locator('.el-input-number').first()
+      await rowsInput.locator('input').fill('5')
+      await rowsInput.locator('input').blur()
+      // 棋盘网格行数 = 1 标签行 + 5 座位行 = 6
+      await expect.poll(async () =>
+        (await page.locator('.board-grid').evaluate(el => getComputedStyle(el).gridTemplateRows)).split(' ').length,
+        { timeout: 8000 }).toBe(6)
+      // 过道1：先设「无」（gutter 减 1），再设「第1列后」（gutter 加回）
+      const gutterCount = () => page.locator('.board-grid .aisle-gutter').count()
+      const nGutter = await gutterCount()
+      const aisleSel = cfgDlg.locator('.el-select').first()
+      await aisleSel.click()
+      await page.locator('.el-select-dropdown:visible .el-select-dropdown__item', { hasText: '无' }).first().click()
+      await expect.poll(gutterCount, { timeout: 8000 }).toBe(Math.max(0, nGutter - 1))
+      await aisleSel.click()
+      await page.locator('.el-select-dropdown:visible .el-select-dropdown__item', { hasText: '第1列后' }).first().click()
+      await expect.poll(gutterCount, { timeout: 8000 }).toBe(Math.max(0, nGutter - 1) + 1)
+      // 弹窗内过道标签与下拉配对（3 个「过道N」标签）
+      await expect(cfgDlg.locator('.cfg-item-label', { hasText: '过道' })).toHaveCount(3)
+
+      // 14.3 简易模式：宠物图/特效整块消失，座位格自动横排居中（h-center）
+      await cfgDlg.locator('.el-switch').first().click()
+      await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 8000 }).toBe(0)
+      await expect(page.locator('.seat .wx-aura')).toHaveCount(0)
+      await expect(page.locator('.seat.h-center').first()).toBeVisible()
+      // 未排座区（若有人）：纯名单网格、无 img、无领养按钮
+      const unseatWrap = page.locator('.unseat-wrap')
+      if (await unseatWrap.count()) {
+        await expect(unseatWrap.locator('.unseated-list')).toBeVisible()
+        await expect(unseatWrap.locator('img')).toHaveCount(0)
+        await expect(unseatWrap.locator('button')).toHaveCount(0)
+      }
+
+      // 14.4 名字位置：切横排贴底 → seat.h-bottom；切回竖排贴左（简易模式下仍自动 h-center）
+      await cfgDlg.locator('.el-radio-button', { hasText: '横排贴底' }).click()
+      await expect(page.locator('.seat.h-bottom').first()).toBeVisible({ timeout: 5000 })
+      await cfgDlg.locator('.el-radio-button', { hasText: '竖排贴左' }).click()
+      await expect(page.locator('.seat.h-center').first()).toBeVisible({ timeout: 5000 })
+      await cfgDlg.locator('.el-dialog__close').last().click()
+      await expect(cfgDlg).toBeHidden()
+
+      // 14.5 偏好持久化：刷新后简易模式仍生效
+      await page.reload()
+      await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 10000 }).toBe(0)
+
+      // 14.6 🖨打印弹窗：倒转开关 → 预览简图与打印区带 flip class；黑白默认开 → mono
+      await page.getByRole('button', { name: '打印' }).click()
+      const pDlg = page.locator('.el-dialog', { hasText: '打印座次表' }).last()
+      await expect(pDlg).toBeVisible()
+      await expect(page.locator('.seat-print-area.mono')).toHaveCount(1)
+      await pDlg.locator('.el-switch').first().click()
+      await expect(page.locator('.pv-board.flip')).toBeVisible({ timeout: 5000 })
+      await expect(page.locator('.seat-print-area.flip')).toHaveCount(1)
+
+      // 14.7 打印媒体：body.seat-printing + print 媒体下只显示打印区；空位 visibility:hidden 保网格
+      await page.evaluate(() => document.body.classList.add('seat-printing'))
+      await page.emulateMedia({ media: 'print' })
+      await expect(page.locator('.seat-print-area')).toBeVisible()
+      await expect(page.locator('.page-toolbar')).toBeHidden()
+      await expect(page.locator('.board-grid')).toBeHidden()
+      await expect(page.locator('.print-seat:not(.print-empty)').first()).toBeVisible()
+      const emptyPrint = page.locator('.print-seat.print-empty').first()
+      if (await emptyPrint.count()) await expect(emptyPrint).toBeHidden() // visibility:hidden
+      await page.emulateMedia({ media: 'screen' })
+      await page.evaluate(() => document.body.classList.remove('seat-printing'))
+      await expect(page.locator('.seat-print-area')).toBeHidden() // 屏幕态恢复隐藏
+      await pDlg.locator('.el-dialog__close').last().click()
     })
   })
 })

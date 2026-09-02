@@ -67,6 +67,18 @@ public class SettingsController extends BaseController {
         return Result.ok();
     }
 
+    /**
+     * 座次表显示偏好（setting 键 seat_display，v 为前端组装的 JSON 字符串：简易模式/字段勾选/名字位置/打印选项）。
+     * 专用端点：只写单键，不走 PUT /profile（后者会 UPDATE sys_user，漏传资料字段会清空教师姓名/邮箱/学校）。
+     * GET 侧零改动——GET /profile 已平铺返回该用户全部 setting k/v。
+     */
+    @PutMapping("/seat-display")
+    public Result<Void> saveSeatDisplay(@RequestBody Map<String, Object> body) {
+        String v = str(body.get("v"));
+        if (!v.isEmpty()) upsertSetting(uid(), "seat_display", v);
+        return Result.ok();
+    }
+
     /** 学校名模糊搜索（全校共享，按使用频次排序） */
     @GetMapping("/schools")
     public Result<List<String>> schools(@RequestParam(required = false) String q) {

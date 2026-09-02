@@ -112,3 +112,33 @@ body {
 ::-webkit-scrollbar-thumb { background: #f3d3e2; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: #efb9d2; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== 座次表打印：打印区屏幕隐藏；body.seat-printing + 打印媒体下只显示打印区 ===== */
+/* （此段必须全局：要控制 body class、@page，以及组件外的 .sidebar 等元素；scoped 样式管不到） */
+.seat-print-area { display: none; }
+@media print {
+  @page { size: landscape; margin: 10mm; }
+  body.seat-printing .sidebar,
+  body.seat-printing .page-toolbar,
+  body.seat-printing .legend,
+  body.seat-printing .podium,
+  body.seat-printing .board-grid,
+  body.seat-printing .unseat-wrap,
+  body.seat-printing .batch-bar,
+  body.seat-printing .el-overlay,
+  body.seat-printing .el-message {
+    display: none !important;
+  }
+  body.seat-printing .seat-print-area { display: block; }
+  /* 黑白省墨：座位/讲台/标签全部黑框白底黑字（选择器加 body 前缀压过组件 scoped 彩色样式） */
+  body.seat-printing .seat-print-area.mono .print-seat,
+  body.seat-printing .seat-print-area.mono .print-seat.boy,
+  body.seat-printing .seat-print-area.mono .print-seat.girl {
+    border: 1.5px solid #000; background: #fff; color: #000;
+  }
+  body.seat-printing .seat-print-area.mono .print-podium {
+    background: #fff; color: #000; border: 1.5px solid #000;
+  }
+  body.seat-printing .seat-print-area.mono .col-label,
+  body.seat-printing .seat-print-area.mono .row-label { color: #000; }
+}

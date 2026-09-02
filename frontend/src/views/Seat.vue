@@ -2,20 +2,8 @@
   <div>
     <div class="page-toolbar">
       <h2 class="page-title">🪑 座次表 · 🐾 宠物园</h2>
-      <span class="cfg-label">行数</span>
-      <el-input-number v-model="rows" :min="1" :max="15" size="small" @change="saveConfig" />
-      <span class="cfg-label">列数</span>
-      <el-input-number v-model="cols" :min="1" :max="15" size="small" @change="saveConfig" />
-      <span class="cfg-label" v-for="n in 3" :key="n">过道{{ n }}</span>
-      <el-select v-model="aisleModel[0]" size="small" style="width:110px" @change="onAisle">
-        <el-option label="无" :value="0" /><el-option v-for="c in cols" :key="c" :label="'第'+c+'列后'" :value="c" />
-      </el-select>
-      <el-select v-model="aisleModel[1]" size="small" style="width:110px" @change="onAisle">
-        <el-option label="无" :value="0" /><el-option v-for="c in cols" :key="c" :label="'第'+c+'列后'" :value="c" />
-      </el-select>
-      <el-select v-model="aisleModel[2]" size="small" style="width:110px" @change="onAisle">
-        <el-option label="无" :value="0" /><el-option v-for="c in cols" :key="c" :label="'第'+c+'列后'" :value="c" />
-      </el-select>
+      <el-button round @click="seatCfgDlg = true">⚙ 座位设置</el-button>
+      <el-button round @click="printDlg = true">🖨 打印</el-button>
       <div class="spacer"></div>
       <el-button type="primary" :icon="Refresh" @click="randomSeat">🔀 随机排座</el-button>
       <el-button type="danger" plain :icon="Delete" @click="clearSeat">清空座次</el-button>
@@ -28,10 +16,12 @@
     </div>
 
     <div class="legend">
-      <span class="lg"><i class="dot boy"></i> 男生</span>
-      <span class="lg"><i class="dot girl"></i> 女生</span>
-      <span class="lg"><i class="aisle-bar"></i> 过道</span>
-      <span class="tip">拖动学生交换座位；点击座位查看/领养宠物</span>
+      <template v-if="disp.fields.gender">
+        <span class="lg"><i class="dot boy"></i> 男生</span>
+        <span class="lg"><i class="dot girl"></i> 女生</span>
+      </template>
+      <span v-if="disp.fields.colLabel" class="lg"><i class="aisle-bar"></i> 过道</span>
+      <span v-if="!disp.simple" class="tip">拖动学生交换座位；点击座位查看/领养宠物</span>
     </div>
 
     <!-- 批量模式浮动条 -->
@@ -47,33 +37,38 @@
 
     <div class="podium">🏫 讲台</div>
 
-    <!-- 座位棋盘：左列行名、顶行列名（都在格子外）；格子内只放宠物，名字竖排贴格子左侧 -->
+    <!-- 座位棋盘：左列行名、顶行列名（都在格子外）；名字位置/性别底色/标签受 ⚙显示设置 控制 -->
     <div class="board-grid" :style="boardGridStyle">
       <!-- 列名（讲台下方） -->
       <div class="board-corner"></div>
-      <div v-for="c in cols" :key="'col'+c" class="col-label"
-           :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
-      <div v-for="aisleCol in aisleDisplayColumns" :key="'al'+aisleCol" class="col-label aisle-label"
-           :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
-      <!-- 行名（每行左侧） -->
-      <div v-for="r in rows" :key="'row'+r" class="row-label"
-           :style="{ gridRow: r + 1, gridColumn: 1 }">第{{ r }}排</div>
+      <template v-if="disp.fields.colLabel">
+        <div v-for="c in cols" :key="'col'+c" class="col-label"
+             :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
+        <div v-for="aisleCol in aisleDisplayColumns" :key="'al'+aisleCol" class="col-label aisle-label"
+             :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
+        <!-- 行名（每行左侧） -->
+        <div v-for="r in rows" :key="'row'+r" class="row-label"
+             :style="{ gridRow: r + 1, gridColumn: 1 }">第{{ r }}排</div>
+      </template>
       <!-- 过道（贯穿所有排） -->
       <div v-for="aisleCol in aisleDisplayColumns" :key="'ag'+aisleCol" class="aisle-gutter"
            :style="{ gridRow: `2 / ${rows + 2}`, gridColumn: aisleCol + 1 }"></div>
-      <!-- 座位（data-sid 供全屏进化演出定位；格内只放宠物与天气特效） -->
+      <!-- 座位（data-sid 供全屏进化演出定位；简易模式只渲染姓名，宠物/特效整块不渲染） -->
       <div v-for="s in seats" :key="s.row + '-' + s.col"
-           class="seat" :class="[seatClass(s), { 'star-today': petOf(s)?.starToday }]"
+           class="seat" :class="[seatClass(s), effNamePos, { 'star-today': !disp.simple && petOf(s)?.starToday }]"
            :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }"
            :data-sid="s.studentId || undefined"
            :draggable="!!s.studentId && !batchMode"
            @dragstart="onDragStart($event, s)" @dragover.prevent @drop="onDrop($event, s)"
            @pointerdown="onSeatDown($event, s)" @pointerup="onSeatUp($event)">
         <template v-if="s.studentId">
-          <span class="seat-name-v">{{ s.name }}</span>
-          <div class="seat-pet">
-            <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(s.studentId)"
-              @click.stop @change="togglePick(s.studentId)" />
+          <!-- 批量勾选在宠物块外：简易模式下批量评价仍可用 -->
+          <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(s.studentId)"
+            @click.stop @change="togglePick(s.studentId)" />
+          <span class="seat-name">{{ s.name }}</span>
+          <span v-if="disp.fields.stuNo && s.stuNo" class="seat-stuno">{{ s.stuNo }}</span>
+          <!-- 宠物与天气特效（简易模式整块隐藏：img/☁️❄️🌈光环✨🩹🎓/飘字 全在其内） -->
+          <div v-if="!disp.simple" class="seat-pet">
             <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
             <span v-if="petOf(s)?.dizzy" class="wx-cloud">☁️<i class="wx-drop">💧</i></span>
             <template v-if="petOf(s)?.frozen">
@@ -81,7 +76,7 @@
             </template>
             <span v-if="petOf(s)?.broken" class="seat-flag flag-bk">🩹</span>
             <span v-if="petOf(s)?.starToday" class="wx-star">🌈</span>
-            <span v-if="petOf(s)?.graduatedCount > 0" class="seat-flag flag-grad">🎓{{ petOf(s).graduatedCount }}</span>
+            <span v-if="disp.fields.badge && petOf(s)?.graduatedCount > 0" class="seat-flag flag-grad">🎓{{ petOf(s).graduatedCount }}</span>
             <!-- Lv4/5 常驻光环 + Lv5 闪点 -->
             <span v-if="petOf(s)?.petId && petOf(s).level >= 4" class="wx-aura" :class="{ lv5: petOf(s).level >= 5 }"><i class="aura-rot"></i></span>
             <template v-if="petOf(s)?.petId && petOf(s).level >= 5">
@@ -106,10 +101,16 @@
       </div>
     </div>
 
-    <!-- 未排座学生：宠物卡形式，功能与座位上一致（领养/评价/批量勾选） -->
-    <div v-if="unSeatedPets.length" class="unseat-wrap">
-      <div class="unseat-title">🐾 未排座学生（{{ unSeatedPets.length }} 人，宠物仍可照料）</div>
-      <div class="pet-grid">
+    <!-- 未排座学生：简易模式=纯名单网格（不可点击）；常规=宠物卡，功能与座位上一致（领养/评价/批量勾选） -->
+    <div v-if="disp.fields.unseated && unSeatedPets.length" class="unseat-wrap">
+      <div class="unseat-title">🐾 未排座学生（{{ unSeatedPets.length }} 人<span v-if="!disp.simple">，宠物仍可照料</span>）</div>
+      <!-- 简易模式：纯名单，无宠物图/领养按钮/进度条，点击不弹宠物窗 -->
+      <div v-if="disp.simple" class="unseated-list">
+        <div v-for="p in unSeatedPets" :key="p.studentId" class="unlist-cell" :class="genderBg(p.gender)">
+          {{ p.name }}<small v-if="disp.fields.stuNo && p.stuNo" class="unlist-stuno">{{ p.stuNo }}</small>
+        </div>
+      </div>
+      <div v-else class="pet-grid">
         <div v-for="p in unSeatedPets" :key="p.studentId" class="pet-card"
           :class="{ frozen: p.frozen, broken: p.broken, picked: selected.has(p.studentId), 'star-today': p.starToday }"
           :data-sid="p.studentId"
@@ -123,7 +124,7 @@
           </template>
           <span v-if="p.broken" class="flag flag-broken">🩹</span>
           <span v-if="p.starToday" class="wx-star">🌈</span>
-          <span v-if="p.graduatedCount > 0" class="flag flag-grad">🎓{{ p.graduatedCount }}</span>
+          <span v-if="disp.fields.badge && p.graduatedCount > 0" class="flag flag-grad">🎓{{ p.graduatedCount }}</span>
 
           <div class="pet-img-wrap">
             <span v-if="p.petId && p.level >= 4" class="wx-aura" :class="{ lv5: p.level >= 5 }"><i class="aura-rot"></i></span>
@@ -147,7 +148,7 @@
           <template v-if="p.petId">
             <div class="pet-name">{{ p.petName }}
               <span v-if="p.hatched === 0" class="lv-badge egg-badge">🥚 孵化中</span>
-              <span v-else class="lv-badge">Lv.{{ p.level }}</span>
+              <span v-else-if="disp.fields.lv" class="lv-badge">Lv.{{ p.level }}</span>
             </div>
             <!-- 蛋态：隐藏等级与进度条，只留孵化提示（成长值照常累计，破壳时结算） -->
             <template v-if="p.hatched === 0">
@@ -162,7 +163,7 @@
             <div class="pet-name egg-name">神秘精灵蛋</div>
             <el-button size="small" type="primary" round @click.stop="openAdopt(p)">🥚 领养精灵</el-button>
           </template>
-          <div class="stu-name">{{ p.name }}</div>
+          <div class="stu-name">{{ p.name }}<small v-if="disp.fields.stuNo && p.stuNo" class="stu-stuno">（{{ p.stuNo }}）</small></div>
         </div>
       </div>
     </div>
@@ -385,6 +386,114 @@
       </el-tabs>
     </el-dialog>
 
+    <!-- ⚙ 座位设置：布局（行列）/ 过道（标签与下拉配对）/ 显示（简易模式+字段+名字位置），改完即时保存 -->
+    <el-dialog v-model="seatCfgDlg" title="⚙ 座位设置" width="520px" align-center>
+      <div class="cfg-section">
+        <div class="cfg-sec-title">📐 布局</div>
+        <div class="cfg-row">
+          <span class="cfg-item-label">行数</span>
+          <el-input-number v-model="rows" :min="1" :max="15" size="small" @change="saveConfig" />
+          <span class="cfg-item-label">列数</span>
+          <el-input-number v-model="cols" :min="1" :max="15" size="small" @change="saveConfig" />
+        </div>
+      </div>
+      <div class="cfg-section">
+        <div class="cfg-sec-title">🚶 过道</div>
+        <div v-for="n in 3" :key="'aisle-cfg'+n" class="cfg-row">
+          <span class="cfg-item-label">过道{{ n }}</span>
+          <el-select v-model="aisleModel[n - 1]" size="small" style="width: 160px" @change="onAisle">
+            <el-option label="无" :value="0" />
+            <el-option v-for="c in cols" :key="'ao'+c" :label="'第' + c + '列后'" :value="c" />
+          </el-select>
+        </div>
+      </div>
+      <div class="cfg-section">
+        <div class="cfg-sec-title">🎨 显示</div>
+        <div class="cfg-row simple-row">
+          <span><b>简易模式</b>（只看座位，不显示宠物与特效）</span>
+          <el-switch :model-value="!!disp.simple" @change="v => disp.simple = v ? 1 : 0" />
+        </div>
+        <el-checkbox-group v-model="fieldChecks" class="cfg-checks">
+          <el-checkbox value="stuNo">学号</el-checkbox>
+          <el-checkbox value="gender">性别底色</el-checkbox>
+          <el-checkbox value="lv">Lv 徽章</el-checkbox>
+          <el-checkbox value="badge">毕业🎓角标</el-checkbox>
+          <el-checkbox value="colLabel">行列标签</el-checkbox>
+          <el-checkbox value="unseated">未排座学生区</el-checkbox>
+        </el-checkbox-group>
+        <div class="cfg-row name-pos-row">
+          <span class="cfg-item-label">名字位置</span>
+          <el-radio-group v-model="disp.namePos" size="small">
+            <el-radio-button value="v-left">竖排贴左</el-radio-button>
+            <el-radio-button value="h-center">横排居中</el-radio-button>
+            <el-radio-button value="h-bottom">横排贴底</el-radio-button>
+          </el-radio-group>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 🖨 打印：倒转180°（平铺讲台）/黑白省墨（默认开）/附未排座名单；右侧迷你预览随倒转旋转 -->
+    <el-dialog v-model="printDlg" title="🖨 打印座次表" width="460px" align-center>
+      <div class="print-opts">
+        <div class="cfg-row">
+          <span>🔄 倒转 180°（纸平铺讲台，低头看方位一致）</span>
+          <el-switch v-model="flipModel" />
+        </div>
+        <div class="cfg-row">
+          <span>🖤 黑白省墨（黑框白底，无彩色底色）</span>
+          <el-switch v-model="monoModel" />
+        </div>
+        <div class="cfg-row">
+          <span>📝 附未排座学生名单</span>
+          <el-switch v-model="withUnseatedModel" />
+        </div>
+      </div>
+      <div class="print-preview">
+        <!-- 迷你示意棋盘：粉色讲台条 + 3×4 灰格；flip 时整体 rotate(180deg)，讲台条转到下方 -->
+        <div class="pv-board" :class="{ flip: disp.print.flip }">
+          <div class="pv-podium">讲台</div>
+          <div class="pv-grid">
+            <div v-for="n in 12" :key="'pv'+n" class="pv-cell">张三</div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button round @click="printDlg = false">取消</el-button>
+        <el-button type="primary" round @click="doPrint">🖨 开始打印</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 打印区：屏幕隐藏，仅 body.seat-printing + 打印媒体显示；只打姓名(+学号)，空位 visibility:hidden 保网格 -->
+    <div class="seat-print-area" :class="{ flip: disp.print.flip, mono: disp.print.mono }">
+      <div class="print-turn">
+        <div class="print-podium">🏫 讲台</div>
+        <div class="print-board" :style="boardGridStyle">
+          <div class="board-corner"></div>
+          <template v-if="disp.fields.colLabel">
+            <div v-for="c in cols" :key="'pcol'+c" class="col-label"
+                 :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
+            <div v-for="aisleCol in aisleDisplayColumns" :key="'pal'+aisleCol" class="col-label aisle-label"
+                 :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
+            <div v-for="r in rows" :key="'prow'+r" class="row-label"
+                 :style="{ gridRow: r + 1, gridColumn: 1 }">第{{ r }}排</div>
+          </template>
+          <div v-for="aisleCol in aisleDisplayColumns" :key="'pag'+aisleCol" class="aisle-gutter"
+               :style="{ gridRow: `2 / ${rows + 2}`, gridColumn: aisleCol + 1 }"></div>
+          <div v-for="s in seats" :key="'ps' + s.row + '-' + s.col"
+               class="print-seat" :class="printSeatClass(s)"
+               :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }">
+            <template v-if="s.studentId">
+              <span class="print-name">{{ s.name }}</span>
+              <span v-if="disp.fields.stuNo && s.stuNo" class="print-stuno">{{ s.stuNo }}</span>
+            </template>
+          </div>
+        </div>
+      </div>
+      <div v-if="disp.print.withUnseated && unSeatedPets.length" class="print-unseated">
+        未排座学生：{{ unSeatedPets.map(p => p.name).join('、') }}
+      </div>
+    </div>
+
     <!-- 自创宠物皮肤弹窗 -->
     <SkinMakerDlg v-model="skinMakerDlg" @saved="onSkinSaved" />
     <!-- 全屏进化演出（升级时 6 秒分镜，点击跳过） -->
@@ -393,7 +502,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import http from '../api/http'
@@ -412,6 +521,65 @@ const SKIN_STAGES = [
   { k: 4, label: 'Lv4' }, { k: 5, label: 'Lv5' }
 ]
 
+// ==================== 显示偏好（setting 键 seat_display，账号级持久化） ====================
+/** 偏好默认值 = 现状界面（宠物模式、竖排名、性别色/标签/角标全开；打印黑白省墨默认开） */
+function dispDefault() {
+  return {
+    simple: 0,
+    fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, colLabel: 1, unseated: 1 },
+    namePos: 'v-left', // v-left 竖排贴左 | h-center 横排居中 | h-bottom 横排贴底
+    print: { flip: 0, mono: 1, withUnseated: 1 }
+  }
+}
+const disp = reactive(dispDefault())
+const seatCfgDlg = ref(false)
+const printDlg = ref(false)
+/** 字段勾选的 key 顺序（el-checkbox-group 用） */
+const FIELD_KEYS = ['stuNo', 'gender', 'lv', 'badge', 'colLabel', 'unseated']
+/** el-checkbox-group 双向绑定：勾选字段 key 数组 ↔ disp.fields 0/1 */
+const fieldChecks = computed({
+  get: () => FIELD_KEYS.filter(k => disp.fields[k]),
+  set: arr => FIELD_KEYS.forEach(k => { disp.fields[k] = arr.includes(k) ? 1 : 0 })
+})
+/** 生效名字位置：简易模式且用户未手动改过（仍默认 v-left）时自动横排居中；纯视图层，不写回偏好 */
+const effNamePos = computed(() =>
+  disp.simple && disp.namePos === 'v-left' ? 'h-center' : disp.namePos)
+/** 打印三个开关：0/1 ↔ boolean */
+const flipModel = computed({ get: () => !!disp.print.flip, set: v => { disp.print.flip = v ? 1 : 0 } })
+const monoModel = computed({ get: () => !!disp.print.mono, set: v => { disp.print.mono = v ? 1 : 0 } })
+const withUnseatedModel = computed({ get: () => !!disp.print.withUnseated, set: v => { disp.print.withUnseated = v ? 1 : 0 } })
+
+/** 加载账号级显示偏好（GET /settings/profile 已平铺返回 seat_display JSON 字符串；坏 JSON/缺字段分层兜底） */
+async function loadDisp() {
+  const p = await http.get('/settings/profile')
+  try {
+    const saved = JSON.parse(p.seat_display || '{}')
+    if (saved.simple != null) disp.simple = saved.simple ? 1 : 0
+    if (saved.namePos) disp.namePos = saved.namePos
+    if (saved.fields) FIELD_KEYS.forEach(k => {
+      if (saved.fields[k] != null) disp.fields[k] = saved.fields[k] ? 1 : 0
+    })
+    if (saved.print) ['flip', 'mono', 'withUnseated'].forEach(k => {
+      if (saved.print[k] != null) disp.print[k] = saved.print[k] ? 1 : 0
+    })
+  } catch { /* 坏 JSON 保持默认 */ }
+}
+loadDisp()
+// 任意变更即时保存（deep watch；无保存按钮；加载合并时触发的写回为同值幂等，无害）
+watch(disp, () => {
+  http.put('/settings/seat-display', { v: JSON.stringify(disp) })
+}, { deep: true })
+
+/** 打印：body 加 class 切打印样式 → nextTick 调浏览器打印 → afterprint 移除 class */
+function doPrint() {
+  printDlg.value = false
+  document.body.classList.add('seat-printing')
+  nextTick(() => {
+    window.onafterprint = () => document.body.classList.remove('seat-printing')
+    window.print()
+  })
+}
+
 // ==================== 座次表 ====================
 const rows = ref(7)
 const cols = ref(8)
@@ -424,10 +592,11 @@ const aisles = computed(() =>
 
 // 过道在网格中的显示列号：逻辑列 c 之后插入，显示列 = c + 前面过道数 + 1（过道占该列）
 const totalDisplayCols = computed(() => cols.value + aisles.value.length)
-// 棋盘网格：左侧多一列行名（40px）、顶部多一行列名（30px），座位坐标整体 +1
+// 棋盘网格：左侧多一列行名（40px）、顶部多一行列名（30px），座位坐标整体 +1；
+// 关闭行列标签时标签行列收窄为 0（坐标体系不变，仅视觉留白消失）
 const boardGridStyle = computed(() => ({
-  gridTemplateColumns: `40px repeat(${totalDisplayCols.value}, minmax(0, 1fr))`,
-  gridTemplateRows: `30px repeat(${rows.value}, auto)`
+  gridTemplateColumns: `${disp.fields.colLabel ? 40 : 0}px repeat(${totalDisplayCols.value}, minmax(0, 1fr))`,
+  gridTemplateRows: `${disp.fields.colLabel ? 30 : 0}px repeat(${rows.value}, auto)`
 }))
 // 过道 gutter 所在显示列
 const aisleDisplayColumns = computed(() =>
@@ -448,8 +617,19 @@ async function loadGrid() {
 }
 loadConfig().then(loadGrid)
 
+/** 性别底色 class：gender 显示项关闭时统一白底灰边（座位格/未排座名单格共用） */
+function genderBg(gender) {
+  if (!disp.fields.gender) return 'no-gender'
+  return gender === '女' ? 'girl' : 'boy'
+}
 function seatClass(s) {
   if (!s.studentId) return 'empty-seat'
+  return genderBg(s.gender)
+}
+/** 打印座位格 class：空位 visibility:hidden 保网格；黑白模式/关性别色=白底（默认样式），彩色模式男蓝女粉 */
+function printSeatClass(s) {
+  if (!s.studentId) return 'print-empty'
+  if (disp.print.mono || !disp.fields.gender) return ''
   return s.gender === '女' ? 'girl' : 'boy'
 }
 
@@ -550,6 +730,8 @@ function onSeatUp(e) {
   downPos = null
   if (Math.hypot(e.clientX - x, e.clientY - y) > 6) return
   if (!s.studentId) return
+  // 简易模式纯查看：点击不弹宠物窗（拖拽换座不受影响，位移阈值已先拦截）
+  if (disp.simple) return
   onCardClick(petOf(s))
 }
 </script>
@@ -596,11 +778,37 @@ function onSeatUp(e) {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255,180,60,0); transform: scale(1); }
   50% { box-shadow: 0 0 0 6px rgba(255,180,60,.55), 0 0 26px rgba(255,180,60,.85); transform: scale(1.04); }
 }
-.seat-name-v {
+/* 座位姓名：三种位置由父级 class（v-left/h-center/h-bottom）纯 CSS 切换 */
+.seat-name { font-weight: 800; z-index: 2; }
+.seat-stuno { z-index: 2; font-weight: 600; }
+/* v-left 竖排贴左（现状默认）：姓名绝对定位左侧竖排，学号横排小字贴格子底部 */
+.seat.v-left .seat-name {
   position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
   writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;
-  font-size: 14px; font-weight: 800; z-index: 2;
+  font-size: 14px;
 }
+.seat.v-left .seat-stuno {
+  position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  writing-mode: horizontal-tb; font-size: 10px; color: #9aa0b0;
+}
+/* h-center 横排居中：姓名在上、宠物小图在下；无宠物（简易模式）时姓名整体居中 */
+.seat.h-center { flex-direction: column; }
+.seat.h-center .seat-name,
+.seat.h-center .seat-stuno { position: static; writing-mode: horizontal-tb; }
+.seat.h-center .seat-name { font-size: 15px; line-height: 1.25; }
+.seat.h-center .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
+.seat.h-center .seat-pet { order: 2; }
+.seat.h-center .seat-pet-img { width: 64px; height: 64px; }
+/* h-bottom 横排贴底：宠物在上，姓名/学号贴卡片底部 */
+.seat.h-bottom { flex-direction: column; }
+.seat.h-bottom .seat-pet { order: 0; }
+.seat.h-bottom .seat-name,
+.seat.h-bottom .seat-stuno { position: static; writing-mode: horizontal-tb; order: 1; }
+.seat.h-bottom .seat-name { font-size: 14px; line-height: 1.25; margin-top: auto; }
+.seat.h-bottom .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
+.seat.h-bottom .seat-pet-img { width: 72px; height: 72px; }
+/* 关闭性别底色：统一白底灰边（座位格） */
+.seat.no-gender { background: #fff; border: 2px solid #e3e6f0; color: #5a5f6e; }
 .seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
 .seat-pet-img { width: 96px; height: 96px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
@@ -956,4 +1164,66 @@ function onSeatUp(e) {
   0%, 100% { opacity: .7; transform: translateX(-50%) scale(1); }
   50% { opacity: 1; transform: translateX(-50%) scale(1.12); }
 }
+
+/* ===== 简易模式：未排座纯名单网格（无宠物图/按钮/进度条，不可点击） ===== */
+.unseated-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
+}
+.unlist-cell {
+  border-radius: 10px; padding: 8px 6px; text-align: center;
+  font-size: 14px; font-weight: 700; border: 2px solid #e3e6f0; background: #fff; color: #5a5f6e;
+}
+.unlist-cell.boy { background: #e3eefc; border-color: #b9d6f7; color: #3a6ea5; }
+.unlist-cell.girl { background: #fde4ee; border-color: #f7c3d8; color: #c2568a; }
+.unlist-stuno { display: block; font-size: 10px; color: #9aa0b0; font-weight: 600; margin-top: 2px; }
+.stu-stuno { color: #b09888; font-weight: 600; }
+
+/* ===== ⚙ 座位设置弹窗 ===== */
+.cfg-section { margin-bottom: 18px; }
+.cfg-section:last-child { margin-bottom: 0; }
+.cfg-sec-title { font-weight: 800; color: #8a5a34; margin-bottom: 10px; font-size: 14px; }
+.cfg-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; color: #6b5b73; }
+.cfg-item-label { color: #8a8fa3; font-size: 13px; min-width: 42px; }
+.cfg-checks { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 4px 0 12px; }
+.simple-row {
+  background: #fff7ee; border-radius: 10px; padding: 8px 12px;
+  justify-content: space-between; margin-bottom: 12px;
+}
+.name-pos-row { margin-top: 4px; }
+
+/* ===== 🖨 打印弹窗：选项 + 迷你预览（倒转时简图 rotate 180°） ===== */
+.print-opts { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.print-opts .cfg-row { justify-content: space-between; margin-bottom: 10px; }
+.print-preview { background: #f6f7fb; border-radius: 12px; padding: 18px 22px; }
+.pv-board { transition: transform .4s ease; }
+.pv-board.flip { transform: rotate(180deg); }
+.pv-podium {
+  background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
+  font-weight: 800; font-size: 12px; padding: 6px; border-radius: 8px; margin-bottom: 8px;
+}
+.pv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pv-cell {
+  background: #e8eaf2; border: 1px dashed #c8ccda; border-radius: 6px;
+  text-align: center; font-size: 11px; color: #8a8fa3; padding: 9px 0;
+}
+
+/* ===== 打印区（屏幕隐藏由全局 theme.css 控制；此处仅内部样式） ===== */
+/* 倒转：讲台+棋盘一起转 180°（.print-turn 包裹），未排座名单不转 */
+.seat-print-area.flip .print-turn { transform: rotate(180deg); }
+.print-podium {
+  background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
+  font-weight: 800; font-size: 16px; padding: 12px; border-radius: 10px; margin-bottom: 12px;
+}
+.print-board { display: grid; gap: 8px; }
+.print-seat {
+  border: 1px solid #b8bcc8; border-radius: 8px; min-height: 52px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #fff; color: #333; font-size: 14px; font-weight: 700;
+}
+.print-seat.boy { background: #eaf3ff; border-color: #9dc4f5; color: #2f5f96; }
+.print-seat.girl { background: #ffeef5; border-color: #f5b8d2; color: #b04878; }
+/* 空位：不画框不显示字，但保留网格位置（行列不错位） */
+.print-empty { visibility: hidden; }
+.print-stuno { font-size: 10px; color: #888; font-weight: 500; }
+.print-unseated { margin-top: 14px; font-size: 13px; color: #333; line-height: 1.9; }
 </style>
