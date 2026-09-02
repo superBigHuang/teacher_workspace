@@ -69,10 +69,10 @@
           <span v-if="disp.fields.stuNo && s.stuNo" class="seat-stuno">{{ s.stuNo }}</span>
           <!-- 宠物与天气特效（简易模式整块隐藏：img/☁️❄️🌈光环✨🩹🎓/飘字 全在其内） -->
           <div v-if="!disp.simple" class="seat-pet">
-            <!-- 本学期 top3 奖牌（按有效点数降序；简易模式/关闭开关/打印均不显示） -->
+            <!-- 本学期 top3 奖牌（按有效点数降序；简易模式/关闭开关/打印均不显示；层级低于宠物，被宠物遮挡下沿） -->
             <div v-if="disp.fields.medal && seatMedalsOf(s.studentId).length" class="seat-medals">
               <BadgeIcon v-for="(m, mi) in seatMedalsOf(s.studentId)" :key="mi"
-                :icon="m.icon" :tier="m.tier" :earned="true" :animate="false" :size="20" :name="m.name" />
+                :icon="m.icon" :tier="m.tier" :earned="true" :animate="false" :size="28" :name="m.name" />
             </div>
             <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
             <span v-if="petOf(s)?.dizzy" class="wx-cloud">☁️<i class="wx-drop">💧</i></span>
@@ -832,8 +832,8 @@ function onSeatUp(e) {
   50% { box-shadow: 0 0 0 6px rgba(255,180,60,.55), 0 0 26px rgba(255,180,60,.85); transform: scale(1.04); }
 }
 /* 座位姓名：三种位置由父级 class（v-left/h-center/h-bottom）纯 CSS 切换 */
-.seat-name { font-weight: 800; z-index: 2; }
-.seat-stuno { z-index: 2; font-weight: 600; }
+.seat-name { font-weight: 800; z-index: 1; }
+.seat-stuno { z-index: 1; font-weight: 600; }
 /* v-left 竖排贴左（现状默认）：姓名绝对定位左侧竖排，学号横排小字贴格子底部 */
 .seat.v-left .seat-name {
   position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
@@ -851,7 +851,7 @@ function onSeatUp(e) {
 .seat.h-center .seat-name { font-size: 15px; line-height: 1.25; }
 .seat.h-center .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
 .seat.h-center .seat-pet { order: 2; }
-.seat.h-center .seat-pet-img { width: 64px; height: 64px; }
+.seat.h-center .seat-pet-img { width: 78px; height: 78px; }
 /* h-bottom 横排贴底：宠物在上，姓名/学号贴卡片底部 */
 .seat.h-bottom { flex-direction: column; }
 .seat.h-bottom .seat-pet { order: 0; }
@@ -859,16 +859,18 @@ function onSeatUp(e) {
 .seat.h-bottom .seat-stuno { position: static; writing-mode: horizontal-tb; order: 1; }
 .seat.h-bottom .seat-name { font-size: 14px; line-height: 1.25; margin-top: auto; }
 .seat.h-bottom .seat-stuno { font-size: 11px; color: #9aa0b0; line-height: 1.2; }
-.seat.h-bottom .seat-pet-img { width: 72px; height: 72px; }
+.seat.h-bottom .seat-pet-img { width: 86px; height: 86px; }
 /* 关闭性别底色：统一白底灰边（座位格） */
 .seat.no-gender { background: #fff; border: 2px solid #e3e6f0; color: #5a5f6e; }
 .seat-pet { position: relative; width: 100%; display: flex; align-items: center; justify-content: center; }
-/* 座位顶部 top3 奖牌：横排居中挂宠物上方；pointer-events:none 不挡拖拽，打印区不渲染故不打印 */
+/* 座位顶部 top3 奖牌：横排挂宠物上方，层级低于宠物（z-index:1），宠物遮挡奖牌下沿；
+   pointer-events:none 不挡拖拽，打印区不渲染故不打印 */
 .seat-medals {
-  position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 2px; z-index: 3; pointer-events: none;
+  position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 2px; z-index: 1; pointer-events: none;
 }
-.seat-pet-img { width: 96px; height: 96px; object-fit: contain; }
+/* 宠物为座位卡最上层（z-index:4）：放大显示，可遮挡奖牌与姓名；状态标记/飘字仍在其上（z-index:5） */
+.seat-pet-img { position: relative; z-index: 4; width: 112px; height: 112px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
 .seat-pet-img:not(.alive) { filter: grayscale(.35) opacity(.8); }
 .seat-pet-img.frozen { filter: hue-rotate(170deg) saturate(1.3) brightness(1.05) drop-shadow(0 0 6px rgba(120,190,255,.8)); }
@@ -893,7 +895,7 @@ function onSeatUp(e) {
 }
 /* 蛋右上角小 ✨（明暗闪烁） */
 .egg-spark {
-  position: absolute; top: 4px; right: 10px; font-size: 15px; z-index: 2;
+  position: absolute; top: 4px; right: 10px; font-size: 15px; z-index: 5;
   pointer-events: none; animation: egg-spark-twinkle 1.6s ease-in-out infinite;
 }
 @keyframes egg-spark-twinkle {
@@ -909,7 +911,7 @@ function onSeatUp(e) {
 }
 /* Lv5 金描边（.wx-aura.lv5 与 img 为兄弟节点） */
 .wx-aura.lv5 ~ img { filter: drop-shadow(0 0 6px rgba(255,210,120,.95)) drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
-.seat-flag { position: absolute; top: -6px; right: 16px; font-size: 16px; z-index: 2; }
+.seat-flag { position: absolute; top: -6px; right: 16px; font-size: 16px; z-index: 5; }
 .seat-flag.flag-bk { top: 32px; right: 16px; }
 .seat-flag.flag-grad {
   right: 8px; top: -8px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
@@ -1109,7 +1111,7 @@ function onSeatUp(e) {
 /* ===== 天气/状态特效 ===== */
 /* 扣分头晕：小乌云漂浮，每 3 秒掉一滴雨 */
 .wx-cloud {
-  position: absolute; top: 0; right: 4px; font-size: 20px; z-index: 3; pointer-events: none;
+  position: absolute; top: 0; right: 4px; font-size: 20px; z-index: 5; pointer-events: none;
   animation: cloud-float 3s ease-in-out infinite;
 }
 .wx-drop {
@@ -1125,7 +1127,7 @@ function onSeatUp(e) {
 }
 /* 冰冻：3 片雪花飘落（错峰由 snowStyle 内联） */
 .wx-snow {
-  position: absolute; top: 4px; font-size: 13px; font-style: normal; z-index: 3; pointer-events: none;
+  position: absolute; top: 4px; font-size: 13px; font-style: normal; z-index: 5; pointer-events: none;
   animation: snow-fall 3.2s linear infinite;
 }
 @keyframes snow-fall {
@@ -1135,7 +1137,7 @@ function onSeatUp(e) {
 }
 /* 今日之星（当日正分合计≥5）：彩虹每 5 秒淡入 2 秒 */
 .wx-star {
-  position: absolute; top: -8px; left: 4px; font-size: 20px; z-index: 3; pointer-events: none;
+  position: absolute; top: -8px; left: 4px; font-size: 20px; z-index: 5; pointer-events: none;
   animation: star-rainbow 5s ease-in-out infinite;
 }
 @keyframes star-rainbow {
@@ -1150,7 +1152,7 @@ function onSeatUp(e) {
 }
 /* Lv4/5 脚下 conic 光环：Lv4 8s 淡，Lv5 5s 亮 */
 .wx-aura {
-  position: absolute; bottom: 0; left: 50%; width: 106px; height: 28px;
+  position: absolute; bottom: 0; left: 50%; width: 122px; height: 28px;
   transform: translateX(-50%); border-radius: 50%; pointer-events: none; z-index: 0;
   opacity: .25; filter: blur(5px);
 }
@@ -1160,12 +1162,12 @@ function onSeatUp(e) {
     transparent 130deg, transparent 220deg, rgba(255,217,138,.7) 280deg, transparent 340deg);
   animation: aura-spin 8s linear infinite;
 }
-.wx-aura.lv5 { opacity: .5; width: 114px; }
+.wx-aura.lv5 { opacity: .5; width: 130px; }
 .wx-aura.lv5 .aura-rot { animation-duration: 5s; }
 @keyframes aura-spin { to { transform: rotate(360deg); } }
 /* Lv5 周身闪点（::before 承载 ✨，错峰由 sparkStyle 内联） */
 .wx-spark {
-  position: absolute; font-size: 14px; z-index: 3; pointer-events: none;
+  position: absolute; font-size: 14px; z-index: 5; pointer-events: none;
   animation: spark-twinkle 2.1s ease-in-out infinite;
 }
 .wx-spark::before { content: '✨'; }
