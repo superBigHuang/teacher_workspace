@@ -25,7 +25,6 @@
         <el-input v-model="loginForm.password" type="password" size="large" show-password
           placeholder="密码" :prefix-icon="Lock" class="field" @keyup.enter="login" />
         <el-button type="primary" size="large" class="enter" :loading="loading" @click="login">进入工作台 🚪</el-button>
-        <p class="hint">默认管理员：admin / 123456</p>
       </div>
 
       <!-- 注册 -->
