@@ -1197,6 +1197,11 @@ function onSeatUp(e) {
 .print-preview { background: #f6f7fb; border-radius: 12px; padding: 18px 22px; }
 .pv-board { transition: transform .4s ease; }
 .pv-board.flip { transform: rotate(180deg); }
+/* 简图随翻转旋转，但格内"张三"与讲台条同步反向转回，动画中与终态文字都正立（贴合打印效果） */
+.pv-board .pv-cell,
+.pv-board .pv-podium { transition: transform .4s ease; }
+.pv-board.flip .pv-cell,
+.pv-board.flip .pv-podium { transform: rotate(180deg); }
 .pv-podium {
   background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
   font-weight: 800; font-size: 12px; padding: 6px; border-radius: 8px; margin-bottom: 8px;
@@ -1208,8 +1213,14 @@ function onSeatUp(e) {
 }
 
 /* ===== 打印区（屏幕隐藏由全局 theme.css 控制；此处仅内部样式） ===== */
-/* 倒转：讲台+棋盘一起转 180°（.print-turn 包裹），未排座名单不转 */
+/* 倒转（纸平铺讲台、老师低头直接看）：.print-turn 整体转 180° 让讲台条移到近老师侧、
+   末排移到远侧（方位翻转）；但格子/讲台条/行列标签各自再转回 180°，文字保持正立可读。
+   格子为矩形、转 180° 边框无形变，仅把其内文字转回来；未排座名单在 .print-turn 外不转。 */
 .seat-print-area.flip .print-turn { transform: rotate(180deg); }
+.seat-print-area.flip .print-seat,
+.seat-print-area.flip .print-podium,
+.seat-print-area.flip .col-label,
+.seat-print-area.flip .row-label { transform: rotate(180deg); }
 .print-podium {
   background: linear-gradient(135deg, #f7a8c8, #f492bb); color: #fff; text-align: center;
   font-weight: 800; font-size: 16px; padding: 12px; border-radius: 10px; margin-bottom: 12px;
