@@ -2,6 +2,7 @@ package com.teacher.platform.controller;
 
 import com.teacher.platform.common.Result;
 import com.teacher.platform.service.PetService;
+import com.teacher.platform.service.RemoteHub;
 import com.teacher.platform.service.TermStatsService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,15 +30,17 @@ public class PetController extends BaseController {
     private final JdbcTemplate jdbc;
     private final PetService petService;
     private final TermStatsService termStats;
+    private final RemoteHub remoteHub;
 
     /** 本地上传目录（自定义皮肤图片落地处，经 /uploads/** 静态映射访问） */
     @Value("${app.upload-dir:./uploads}")
     private String uploadDir;
 
-    public PetController(JdbcTemplate jdbc, PetService petService, TermStatsService termStats) {
+    public PetController(JdbcTemplate jdbc, PetService petService, TermStatsService termStats, RemoteHub remoteHub) {
         this.jdbc = jdbc;
         this.petService = petService;
         this.termStats = termStats;
+        this.remoteHub = remoteHub;
     }
 
     private Long classId() {
@@ -111,15 +114,24 @@ public class PetController extends BaseController {
         return ok ? Result.ok() : Result.fail("该学生已领养过宠物");
     }
 
-    /** 单人评价；响应 levelUps 为本次触发的升级（前端立即播放进化演出） */
+    /**
+     * 单人评价；响应 levelUps 为本次触发的升级（前端立即播放进化演出）。
+     * defer=true（手机遥控端）：来源记 REMOTE，升级置 evolve_pending 攒入待播队列，
+     * 由 PC 投影端收到遥控指令后集中播放（上课随手加分不打断投影）；
+     * 评价生效后广播 pets.changed，让在线的 PC/手机端自动刷新宠物状态。
+     */
     @PostMapping("/evaluate")
     public Result<Map<String, Object>> evaluate(@RequestBody Map<String, Object> body) {
         Long sid = asLong(body.get("studentId"));
         Long ruleId = asLong(body.get("ruleId"));
-        PetService.AwardResult r = petService.award(uid(), sid, ruleId, null, "MANUAL", null, null);
+        boolean defer = Boolean.TRUE.equals(body.get("defer"));
+        PetService.AwardResult r = petService.award(uid(), sid, ruleId, null, defer ? "REMOTE" : "MANUAL", null, null);
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("affected", r.affected());
-        res.put("levelUps", r.levelUp() == null ? List.of() : List.of(r.levelUp()));
+        res.put("levelUps", (!defer && r.levelUp() != null) ? List.of(r.levelUp()) : List.of());
+        if (defer && r.affected() > 0) {
+            remoteHub.dispatch(uid(), "pets.changed", Map.of("studentId", sid == null ? 0 : sid));
+        }
         return Result.ok(res);
     }
 

@@ -363,11 +363,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import http from '../api/http'
 import { usePets, PET_CATS } from '../composables/usePets'
+import { onRemoteCmd } from '../composables/useRemote'
 import EvolutionShow from '../components/EvolutionShow.vue'
 import SkinMakerDlg from '../components/SkinMakerDlg.vue'
 
@@ -472,8 +473,19 @@ const {
   openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, revokeLog,
   openEvalSingle, openEvalBatch, applyRule, doGraduate,
   openRanking, openShop, doExchange, fulfill, saveItem, deleteItem,
-  openRules, saveRule, toggleRule, deleteRule
+  openRules, saveRule, toggleRule, deleteRule,
+  loadPets
 } = usePets()
+
+// 手机遥控：手机端加减分/兑换等写操作后服务器广播 pets.changed，PC 静默重拉宠物状态
+// （遥控在线期间 loadPets 的 pending 进化攒入待播列表，不打断投影；spotlight 高亮样式见 .remote-spot）
+let offRemote = null
+onMounted(() => {
+  offRemote = onRemoteCmd((action) => {
+    if (action === 'pets.changed') loadPets()
+  })
+})
+onUnmounted(() => offRemote?.())
 
 /** 取座位上学生对应的宠物状态（/pet/pets 返回全班，含未领养） */
 function petOf(s) {
@@ -548,6 +560,12 @@ function onSeatUp(e) {
 .seat.boy { background: #e3eefc; border: 2px solid #b9d6f7; color: #3a6ea5; }
 .seat.girl { background: #fde4ee; border: 2px solid #f7c3d8; color: #c2568a; }
 .seat.empty-seat { background: #f7f8fc; border: 2px dashed #e3e6f0; color: #c0c4d0; display: flex; align-items: center; justify-content: center; }
+/* 手机遥控 spotlight「找人」：目标座位金色脉冲 3 秒 */
+.seat.remote-spot { animation: remote-spot 1s ease-in-out 3; z-index: 5; }
+@keyframes remote-spot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,180,60,0); transform: scale(1); }
+  50% { box-shadow: 0 0 0 6px rgba(255,180,60,.55), 0 0 26px rgba(255,180,60,.85); transform: scale(1.04); }
+}
 .seat-name-v {
   position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
   writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px;

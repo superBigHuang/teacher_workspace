@@ -37,7 +37,8 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/auth/login", "/api/auth/register");
+                // /remote/events 走一次性 ticket 鉴权（EventSource 无法带 Authorization 头），不在 JWT 拦截范围
+                .excludePathPatterns("/api/auth/login", "/api/auth/register", "/api/remote/events");
     }
 
     @Override

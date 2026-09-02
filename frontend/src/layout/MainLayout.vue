@@ -61,11 +61,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import http from '../api/http'
+import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
+import { playHeld } from '../composables/usePets'
 
 /** 可选头像 emoji（动物/笑脸/职业，马卡龙风格） */
 const AVATARS = [
@@ -91,7 +93,41 @@ onMounted(async () => {
     const p = await http.get('/settings/profile')
     if (p.avatar) { avatar.value = p.avatar; localStorage.setItem('avatar', p.avatar) }
   } catch (e) { /* 未登录等情况忽略 */ }
+  // 启动手机遥控 SSE 通道（投影场景：手机发指令，PC 执行）
+  startRemote()
+  offRemote = onRemoteCmd(handleRemoteCmd)
 })
+
+let offRemote = null
+onUnmounted(() => { offRemote?.(); stopRemote() })
+
+/**
+ * 遥控指令处理（全局级）：
+ * - navigate：PC 切到指定页面
+ * - evolve.playAll / evolve.play：先切到座次表页（演出组件挂在该页），等渲染后播放待播进化
+ * - spotlight：切到座次表并高亮目标学生座位 3 秒（.remote-spot 样式在 Seat.vue 定义）
+ */
+function handleRemoteCmd(action, payload) {
+  if (action === 'navigate' && payload.path) {
+    router.push(payload.path)
+    return
+  }
+  if (action === 'evolve.playAll' || action === 'evolve.play' || action === 'spotlight') {
+    const onSeat = router.currentRoute.value.path === '/seat'
+    const run = () => {
+      if (action === 'evolve.playAll') playHeld()
+      else if (action === 'evolve.play') playHeld(payload.studentId)
+      else if (action === 'spotlight') {
+        const el = document.querySelector(`[data-sid="${payload.studentId}"]`)
+        if (!el) return
+        el.classList.add('remote-spot')
+        setTimeout(() => el.classList.remove('remote-spot'), 3000)
+      }
+    }
+    if (onSeat) run()
+    else { router.push('/seat'); setTimeout(run, 600) }
+  }
+}
 
 /** 选择头像：即时保存到个人设置并刷新侧边栏 */
 async function pickAvatar(a) {
@@ -117,6 +153,7 @@ const navs = [
 ]
 
 function logout() {
+  stopRemote()
   localStorage.removeItem('token')
   localStorage.removeItem('displayName')
   localStorage.removeItem('username')

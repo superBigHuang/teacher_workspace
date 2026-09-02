@@ -22,6 +22,84 @@ export const FX_THEMES = {
 let skinCache = []
 export function setSkinCache(list) { skinCache = list || [] }
 
+// ---------- 全屏进化演出队列（模块级单例：SSE 遥控指令、座次表页、手机页共享同一队列状态） ----------
+const evolveQueue = ref([])     // 待演分幕
+const currentEvolve = ref(null) // 正在演的一幕（传给 EvolutionShow 组件）
+let evolveBusy = false
+let resolveScene = null
+
+/** 遥控 SSE 是否在线：在线时跨页 pending 进化攒入待播列表，等手机指令集中播放（上课不打断投影） */
+let remoteActive = false
+export function setRemoteActive(v) { remoteActive = !!v }
+
+/** 遥控在线期间攒下的待播进化（手机页显示清单、PC 端收到播放指令后入队） */
+const heldEvolves = ref([])
+
+/** 升级事件入队（来源：同步接口 levelUps / 跨页 pendingEvolves / 待播列表播放）；同一学生去重 */
+function enqueueEvolves(ups) {
+  if (!ups?.length) return
+  for (const u of ups) {
+    const fromLevel = u.fromLevel ?? (u.toLevel - 1)
+    const dup = currentEvolve.value?.studentId === u.studentId ||
+      evolveQueue.value.some(q => q.studentId === u.studentId)
+    if (dup) continue
+    evolveQueue.value.push({
+      studentId: u.studentId, name: u.name, petName: u.petName,
+      fromLevel, toLevel: u.toLevel,
+      skinKey: u.skinKey || 'dragon', fxTheme: u.fxTheme || 'gold',
+      fromImg: skinImg(u.skinKey || 'dragon', fromLevel),
+      toImg: skinImg(u.skinKey || 'dragon', u.toLevel),
+      pending: !!u.pending
+    })
+  }
+  void pumpEvolve()
+}
+
+/** 逐幕播放，幕间 0.3s；组件播完/跳过调 onEvolveDone 放行 */
+async function pumpEvolve() {
+  if (evolveBusy) return
+  evolveBusy = true
+  while (evolveQueue.value.length) {
+    currentEvolve.value = evolveQueue.value.shift()
+    await new Promise(res => { resolveScene = res })
+    await new Promise(r => setTimeout(r, 300))
+  }
+  currentEvolve.value = null
+  evolveBusy = false
+}
+
+/** 一幕结束：pending 来源通知后端清 evolve_pending 标记 */
+async function onEvolveDone() {
+  const scene = currentEvolve.value
+  currentEvolve.value = null
+  if (scene?.pending) {
+    try { await http.post('/pet/evolve-seen', { studentId: scene.studentId }) } catch (e) { /* 标记清理失败不阻塞 */ }
+  }
+  resolveScene?.()
+  resolveScene = null
+}
+
+/** pending 进化攒入待播列表（遥控在线时 loadPets 走这里），按学生去重 */
+function holdEvolves(ups) {
+  for (const u of ups || []) {
+    if (heldEvolves.value.some(h => h.studentId === u.studentId)) continue
+    heldEvolves.value.push({ ...u, pending: true })
+  }
+}
+
+/**
+ * 播放待播进化：不传 studentId 播全部（手机"全部播放"），传则只播指定一条。
+ * 从待播列表移除并入演出队列；演完由 onEvolveDone 调 evolve-seen 清后端标记。
+ */
+export function playHeld(studentId) {
+  const pick = studentId
+    ? heldEvolves.value.filter(h => h.studentId === studentId)
+    : [...heldEvolves.value]
+  if (!pick.length) return
+  heldEvolves.value = heldEvolves.value.filter(h => !pick.includes(h))
+  enqueueEvolves(pick)
+}
+
 /** 皮肤某阶段图片 URL（stage: 'egg' 或 1~5）；缺图兜底内置云龙 */
 export function skinImg(skinKey, stage) {
   const sk = skinCache.find(s => s.skinKey === (skinKey || 'dragon'))
@@ -137,19 +215,21 @@ export function usePets() {
   }
 
   function sourceText(s) {
-    return { AUTO_ATTENDANCE: '考勤联动', AUTO_HOMEWORK: '作业联动', AUTO_DISCIPLINE: '纪律联动', AUTO_SCORE: '成绩发奖' }[s] || '评价'
+    return { AUTO_ATTENDANCE: '考勤联动', AUTO_HOMEWORK: '作业联动', AUTO_DISCIPLINE: '纪律联动', AUTO_SCORE: '成绩发奖', REMOTE: '手机遥控' }[s] || '评价'
   }
 
   // ---------- 数据加载 ----------
   /**
    * 加载全班宠物；返回体为 {pets, pendingEvolves}：
-   * pendingEvolves 是跨页面/自动联动导致的待演升级，入队补播（演完调 evolve-seen）。
+   * pendingEvolves 是跨页面/自动联动/手机遥控导致的待演升级——
+   * 遥控在线时攒入 heldEvolves 待播列表（等手机"播放"指令），否则入队补播（演完调 evolve-seen）。
    */
   async function loadPets() {
     const data = await http.get('/pet/pets')
     pets.value = data.pets || data
     const pending = (data.pendingEvolves || []).map(u => ({ ...u, pending: true }))
-    enqueueEvolves(pending)
+    if (remoteActive) holdEvolves(pending)
+    else enqueueEvolves(pending)
   }
   async function loadRules() {
     rules.value = await http.get('/pet/rules')
@@ -163,55 +243,8 @@ export function usePets() {
     return rules.value.filter(r => r.category === c)
   }
 
-  // ---------- 全屏进化演出队列 ----------
-  const evolveQueue = ref([])   // 待演分幕
-  const currentEvolve = ref(null) // 正在演的一幕（传给 EvolutionShow 组件）
-  let evolveBusy = false
-  let resolveScene = null
-
-  /** 升级事件入队（来源：同步接口 levelUps / 跨页 pendingEvolves）；同一学生去重防重复入队 */
-  function enqueueEvolves(ups) {
-    if (!ups?.length) return
-    for (const u of ups) {
-      const fromLevel = u.fromLevel ?? (u.toLevel - 1)
-      const dup = currentEvolve.value?.studentId === u.studentId ||
-        evolveQueue.value.some(q => q.studentId === u.studentId)
-      if (dup) continue
-      evolveQueue.value.push({
-        studentId: u.studentId, name: u.name, petName: u.petName,
-        fromLevel, toLevel: u.toLevel,
-        skinKey: u.skinKey || 'dragon', fxTheme: u.fxTheme || 'gold',
-        fromImg: skinImg(u.skinKey || 'dragon', fromLevel),
-        toImg: skinImg(u.skinKey || 'dragon', u.toLevel),
-        pending: !!u.pending
-      })
-    }
-    void pumpEvolve()
-  }
-
-  /** 逐幕播放，幕间 0.3s；组件播完/跳过调 onEvolveDone 放行 */
-  async function pumpEvolve() {
-    if (evolveBusy) return
-    evolveBusy = true
-    while (evolveQueue.value.length) {
-      currentEvolve.value = evolveQueue.value.shift()
-      await new Promise(res => { resolveScene = res })
-      await new Promise(r => setTimeout(r, 300))
-    }
-    currentEvolve.value = null
-    evolveBusy = false
-  }
-
-  /** 一幕结束：跨页 pending 来源通知后端清 evolve_pending 标记 */
-  async function onEvolveDone() {
-    const scene = currentEvolve.value
-    currentEvolve.value = null
-    if (scene?.pending) {
-      try { await http.post('/pet/evolve-seen', { studentId: scene.studentId }) } catch (e) { /* 标记清理失败不阻塞 */ }
-    }
-    resolveScene?.()
-    resolveScene = null
-  }
+  // 进化演出队列/待播列表为模块级单例（enqueueEvolves/currentEvolve/onEvolveDone/heldEvolves/playHeld），
+  // 供 SSE 遥控指令与座次表页共享；此处直接引用。
 
   // ---------- 卡片交互（未排座宠物卡用；座位卡点击由调用方区分拖拽后调用） ----------
   function onCardClick(p) {
@@ -414,8 +447,8 @@ export function usePets() {
     adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
     adoptName, adoptSkin, adoptTarget, detailStudent, detailLogs, evalBatch, evalTarget, evalCat,
     gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
-    // 进化演出
-    currentEvolve, enqueueEvolves, onEvolveDone,
+    // 进化演出（模块级单例）
+    currentEvolve, enqueueEvolves, onEvolveDone, heldEvolves, playHeld,
     // 工具
     petImg, skinImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
     // 交互
