@@ -126,14 +126,14 @@ public class TimetableController extends BaseController {
         return Result.ok(Map.of("periods", periods, "cells", cells));
     }
 
-    /** 排课/换课（某班某天某节） */
+    /** 排课/换课（某班某天某节）；入参 id 兼容 Number 与数字字符串（前端 el-select value 可能传 "2"） */
     @PostMapping("/cell")
     public Result<Void> setCell(@RequestBody Map<String, Object> body) {
         Long uid = uid();
-        Long classId = ((Number) body.get("classId")).longValue();
-        int dow = ((Number) body.get("dayOfWeek")).intValue();
-        Long periodId = ((Number) body.get("periodId")).longValue();
-        Long subjectId = body.get("subjectId") == null ? null : ((Number) body.get("subjectId")).longValue();
+        Long classId = Long.valueOf(String.valueOf(body.get("classId")));
+        int dow = Integer.parseInt(String.valueOf(body.get("dayOfWeek")));
+        Long periodId = Long.valueOf(String.valueOf(body.get("periodId")));
+        Long subjectId = body.get("subjectId") == null ? null : Long.valueOf(String.valueOf(body.get("subjectId")));
         jdbc.update("DELETE FROM timetable WHERE user_id=? AND class_id=? AND day_of_week=? AND period_id=?",
                 uid, classId, dow, periodId);
         if (subjectId != null) {
