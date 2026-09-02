@@ -36,9 +36,15 @@
       </div>
     </div>
 
-    <!-- 分数段柱状图 -->
+    <!-- 分数段柱状图（可选科目；选了对比考试时叠加对比虚线，图例可点击开关） -->
     <el-card class="block">
-      <h3 class="block-title">📊 成绩分析图表 · 分数段分布（全部科目）</h3>
+      <div class="block-head">
+        <h3 class="block-title">📊 成绩分析图表 · 分数段分布</h3>
+        <el-select v-model="barSubject" size="small" style="width:140px" @change="loadDistribution">
+          <el-option label="全部科目" value="" />
+          <el-option v-for="s in subjectStats" :key="s.subject" :label="s.subject" :value="s.subject" />
+        </el-select>
+      </div>
       <div ref="barEl" class="chart"></div>
     </el-card>
 
@@ -205,6 +211,8 @@ const cmpExam = ref(null)
 const subjectStats = ref([])
 const lineSubject = ref('')
 const lineData = ref({})
+const barSubject = ref('') // 分数段图选中科目（'' = 全部科目合并）
+const barData = ref({})
 const detail = reactive({ subjects: [], rows: [] })
 const compare = reactive({ subjects: [], rows: [] })
 
@@ -308,55 +316,93 @@ async function loadExams() {
 }
 
 async function loadAll() {
-  if (!curExam.value) { subjectStats.value = []; detail.subjects = []; detail.rows = []; return }
+  if (!curExam.value) { subjectStats.value = []; detail.subjects = []; detail.rows = []; barData.value = {}; return }
   subjectStats.value = await http.get('/score/subject-stats', { params: { examId: curExam.value } })
-  const dist = await http.get('/score/distribution', { params: { examId: curExam.value } })
   const d = await http.get('/score/detail', { params: { examId: curExam.value } })
   detail.subjects = d.subjects; detail.rows = d.rows
   if (!lineSubject.value && subjectStats.value.length) lineSubject.value = subjectStats.value[0].subject
-  await loadLine()
-  nextTick(() => renderBar(dist))
+  await Promise.all([loadLine(), loadDistribution()])
 }
 
-function renderBar(dist) {
-  if (!barEl.value) return
+/** 分数段数据：带选中科目与对比考试；到位后 nextTick 重绘（drawBar） */
+async function loadDistribution() {
+  if (!curExam.value) return
+  const params = { examId: curExam.value }
+  if (barSubject.value) params.subject = barSubject.value
+  if (cmpExam.value) params.compareExamId = cmpExam.value
+  barData.value = await http.get('/score/distribution', { params })
+  nextTick(drawBar)
+}
+
+/** 分数段柱状图：本次为柱、对比考试为虚线（图例可点击开关）；setOption notMerge 防切换后旧系列残留 */
+function drawBar() {
+  if (!barEl.value || !barData.value.labels) return
   barChart ||= echarts.init(barEl.value)
   const colors = ['#f78fb3', '#f6a86b', '#f5d76e', '#67d39a', '#6fa8f5']
+  const hasCmp = !!barData.value.cmpCounts
+  const series = [
+    { name: '本次考试', type: 'bar', barWidth: hasCmp ? '40%' : '55%',
+      data: barData.value.counts.map((v, i) => ({ value: v, itemStyle: { color: colors[i] } })),
+      label: { show: true, position: 'top' } }
+  ]
+  if (hasCmp) {
+    series.push({ name: '对比考试', type: 'line', data: barData.value.cmpCounts, smooth: true, symbolSize: 8,
+      lineStyle: { color: '#909399', width: 2, type: 'dashed' }, itemStyle: { color: '#909399' },
+      label: { show: true, fontSize: 10, color: '#909399' } })
+  }
   barChart.setOption({
     tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 30 },
-    xAxis: { type: 'category', data: dist.labels },
-    yAxis: { type: 'value' },
-    series: [{ type: 'bar', data: dist.counts.map((v, i) => ({ value: v, itemStyle: { color: colors[i] } })), barWidth: '55%', label: { show: true, position: 'top' } }]
-  })
+    legend: { top: 0, data: hasCmp ? ['本次考试', '对比考试'] : [] },
+    grid: { left: 40, right: 20, top: hasCmp ? 40 : 20, bottom: 30 },
+    xAxis: { type: 'category', data: barData.value.labels },
+    yAxis: { type: 'value', minInterval: 1 },
+    series
+  }, true)
 }
 
-/** 拉取单科折线数据；数据写入 lineData 后由 watch(lineData) 触发 drawLine 重绘（勿在末尾再触发加载，会成请求死循环） */
+/** 拉取单科折线数据（选了对比考试则带 compareExamId，后端按学生对齐返回 cmpScores）；数据写入 lineData 后由 watch(lineData) 触发 drawLine 重绘（勿在末尾再触发加载，会成请求死循环） */
 async function loadLine() {
   if (!lineSubject.value) return
-  lineData.value = await http.get('/score/line', { params: { examId: curExam.value, subject: lineSubject.value } })
+  const params = { examId: curExam.value, subject: lineSubject.value }
+  if (cmpExam.value) params.compareExamId = cmpExam.value
+  lineData.value = await http.get('/score/line', { params })
 }
+
+/** 折线图：本次分数/本次平均常态；选了对比考试加对比分数曲线；图例可点击开关各曲线 */
 function drawLine() {
   if (!lineEl.value || !lineData.value.names) return
   lineChart ||= echarts.init(lineEl.value)
+  const hasCmp = !!lineData.value.cmpScores
+  const series = [
+    { name: '本次分数', type: 'line', data: lineData.value.scores, smooth: true,
+      itemStyle: { color: '#6fa8f5' }, label: { show: true, fontSize: 9 } },
+    { name: '本次平均', type: 'line', data: lineData.value.names.map(() => lineData.value.avg),
+      lineStyle: { type: 'dashed', color: '#f78fb3' }, itemStyle: { color: '#f78fb3' }, symbol: 'none' }
+  ]
+  if (hasCmp) {
+    series.push({ name: '对比分数', type: 'line', data: lineData.value.cmpScores, smooth: true, symbolSize: 5,
+      lineStyle: { color: '#e6a23c', width: 2 }, itemStyle: { color: '#e6a23c' }, connectNulls: false })
+  }
   lineChart.setOption({
     tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 60 },
+    legend: { top: 0, data: hasCmp ? ['本次分数', '对比分数', '本次平均'] : ['本次分数', '本次平均'] },
+    grid: { left: 40, right: 20, top: 40, bottom: 60 },
     xAxis: { type: 'category', data: lineData.value.names, axisLabel: { rotate: 45, fontSize: 10 } },
     yAxis: { type: 'value', min: 0, max: 100 },
-    series: [
-      { name: '分数', type: 'line', data: lineData.value.scores, smooth: true,
-        itemStyle: { color: '#6fa8f5' }, label: { show: true, fontSize: 9 } },
-      { name: '平均线', type: 'line', data: lineData.value.names.map(() => lineData.value.avg),
-        lineStyle: { type: 'dashed', color: '#f78fb3' }, itemStyle: { color: '#f78fb3' }, symbol: 'none' }
-    ]
-  })
+    series
+  }, true)
 }
 
 async function loadCompare() {
-  if (!cmpExam.value) { compare.subjects = []; compare.rows = []; return }
-  const r = await http.get('/score/compare', { params: { examA: curExam.value, examB: cmpExam.value } })
-  compare.subjects = r.subjects; compare.rows = r.rows
+  if (!cmpExam.value) {
+    compare.subjects = []; compare.rows = []
+  } else {
+    const r = await http.get('/score/compare', { params: { examA: curExam.value, examB: cmpExam.value } })
+    compare.subjects = r.subjects; compare.rows = r.rows
+  }
+  // 对比考试变化（含清空）同步刷新两图表的对比曲线
+  loadDistribution()
+  loadLine()
 }
 
 async function doImport(opt) {

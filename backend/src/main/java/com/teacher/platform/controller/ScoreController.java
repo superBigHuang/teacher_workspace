@@ -169,30 +169,52 @@ public class ScoreController extends BaseController {
         return Result.ok(result);
     }
 
-    /** 分数段分布（全部科目合并） */
+    /**
+     * 分数段分布：subject 为空则全部科目合并，否则单科；
+     * 传 compareExamId 时额外返回 cmpCounts（对比考试同口径分段，前端画对比曲线）
+     */
     @GetMapping("/distribution")
-    public Result<Map<String, Object>> distribution(@RequestParam Long examId) {
-        List<Double> scores = jdbc.queryForList(
-                "SELECT score FROM score WHERE user_id=? AND exam_id=?", uid(), examId)
-                .stream().map(m -> ((Number) m.get("score")).doubleValue()).toList();
-        int[] buckets = new int[5]; // <60, 60-69, 70-79, 80-89, >=90
-        for (double v : scores) {
-            if (v < 60) buckets[0]++;
-            else if (v < 70) buckets[1]++;
-            else if (v < 80) buckets[2]++;
-            else if (v < 90) buckets[3]++;
-            else buckets[4]++;
-        }
-        return Result.ok(Map.of("labels", List.of("0-59", "60-69", "70-79", "80-89", "90-100"),
-                "counts", Arrays.stream(buckets).boxed().toList()));
+    public Result<Map<String, Object>> distribution(@RequestParam Long examId,
+                                                    @RequestParam(required = false) String subject,
+                                                    @RequestParam(required = false) Long compareExamId) {
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("labels", List.of("0-59", "60-69", "70-79", "80-89", "90-100"));
+        res.put("counts", buckets(examId, subject));
+        if (compareExamId != null) res.put("cmpCounts", buckets(compareExamId, subject));
+        return Result.ok(res);
     }
 
-    /** 单科折线：学生按分数降序 + 平均线 */
+    /** 某考试（可选单科）分数段计数：<60 / 60-69 / 70-79 / 80-89 / ≥90 */
+    private List<Integer> buckets(Long examId, String subject) {
+        String sql = "SELECT score FROM score WHERE user_id=? AND exam_id=?";
+        List<Object> args = new ArrayList<>(List.of(uid(), examId));
+        if (subject != null && !subject.isBlank()) {
+            sql += " AND subject=?";
+            args.add(subject);
+        }
+        int[] b = new int[5];
+        for (double v : jdbc.queryForList(sql, args.toArray())
+                .stream().map(m -> ((Number) m.get("score")).doubleValue()).toList()) {
+            if (v < 60) b[0]++;
+            else if (v < 70) b[1]++;
+            else if (v < 80) b[2]++;
+            else if (v < 90) b[3]++;
+            else b[4]++;
+        }
+        return Arrays.stream(b).boxed().toList();
+    }
+
+    /**
+     * 单科折线：学生按本次分数降序 + 平均线；
+     * 传 compareExamId 时额外返回 cmpScores（对比考试同科分数，按本次学生顺序对齐，缺考为 null）、cmpAvg
+     */
     @GetMapping("/line")
-    public Result<Map<String, Object>> line(@RequestParam Long examId, @RequestParam String subject) {
+    public Result<Map<String, Object>> line(@RequestParam Long examId, @RequestParam String subject,
+                                            @RequestParam(required = false) Long compareExamId) {
+        Long uid = uid();
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT stu_name name, score FROM score WHERE user_id=? AND exam_id=? AND subject=? ORDER BY score DESC",
-                uid(), examId, subject);
+                "SELECT student_id sid, stu_name name, score FROM score WHERE user_id=? AND exam_id=? AND subject=? ORDER BY score DESC",
+                uid, examId, subject);
         List<String> names = rows.stream().map(r -> (String) r.get("name")).toList();
         List<Double> vals = rows.stream().map(r -> round(((Number) r.get("score")).doubleValue())).toList();
         DoubleSummaryStatistics st = vals.stream().mapToDouble(Double::doubleValue).summaryStatistics();
@@ -204,7 +226,35 @@ public class ScoreController extends BaseController {
         stats.put("min", round(st.getMin()));
         stats.put("above", above);
         stats.put("below", vals.size() - above);
-        return Result.ok(Map.of("names", names, "scores", vals, "avg", avg, "stats", stats));
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("names", names);
+        res.put("scores", vals);
+        res.put("avg", avg);
+        res.put("stats", stats);
+        if (compareExamId != null) {
+            // 对比考试同科分数，按 student_id（缺失回退姓名）映射到本次学生顺序
+            List<Map<String, Object>> cmpRows = jdbc.queryForList(
+                    "SELECT student_id sid, stu_name name, score FROM score WHERE user_id=? AND exam_id=? AND subject=?",
+                    uid, compareExamId, subject);
+            Map<String, Double> cmpMap = new HashMap<>();
+            for (Map<String, Object> r : cmpRows) {
+                cmpMap.put(lineKey(r), ((Number) r.get("score")).doubleValue());
+            }
+            List<Double> cmpScores = new ArrayList<>();
+            for (Map<String, Object> r : rows) {
+                Double v = cmpMap.get(lineKey(r));
+                cmpScores.add(v == null ? null : round(v));
+            }
+            double cmpAvg = round(cmpRows.stream().mapToDouble(r -> ((Number) r.get("score")).doubleValue()).average().orElse(0));
+            res.put("cmpScores", cmpScores);
+            res.put("cmpAvg", cmpAvg);
+        }
+        return Result.ok(res);
+    }
+
+    /** 折线学生对齐键：有在籍 id 用 S+id，否则 N+姓名（与双考试对比 studentKey 同口径） */
+    private String lineKey(Map<String, Object> row) {
+        return row.get("sid") != null ? "S" + row.get("sid") : "N" + row.get("name");
     }
 
     /** 成绩明细：排名/学号/姓名/各科/总分/平均分 */

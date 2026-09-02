@@ -389,11 +389,25 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(c1).toBeLessThan(10)
     })
 
-    await test.step('成绩分析：选择对比考试 → 进退步对比表', async () => {
+    await test.step('成绩分析：选择对比考试 → 进退步对比表 + 两图表对比曲线', async () => {
       await page.locator('.el-select').nth(1).click()
       await page.getByRole('option', { name: /E2E摸底/ }).click()
       await expect(page.getByText('考试进退步对比')).toBeVisible()
       await expect(page.locator('.el-tag').filter({ hasText: /↑|↓/ }).first()).toBeVisible()
+      // 选了对比考试：折线/分数段两图表请求都带 compareExamId（对比曲线数据）
+      await expect.poll(() => page.evaluate(() =>
+        performance.getEntriesByType('resource').some(r => r.name.includes('/score/line') && r.name.includes('compareExamId'))),
+        { timeout: 10000 }).toBe(true)
+      await expect.poll(() => page.evaluate(() =>
+        performance.getEntriesByType('resource').some(r => r.name.includes('/score/distribution') && r.name.includes('compareExamId'))),
+        { timeout: 10000 }).toBe(true)
+      // 分数段图可切科目：卡片内下拉选「数学」→ 请求带 subject
+      const barCard = page.locator('.el-card', { hasText: '分数段分布' })
+      await barCard.locator('.el-select').click()
+      await page.getByRole('option', { name: '数学', exact: true }).click()
+      await expect.poll(() => page.evaluate(() =>
+        performance.getEntriesByType('resource').some(r => r.name.includes('/score/distribution') && r.name.includes('subject='))),
+        { timeout: 8000 }).toBe(true)
     })
 
     // ============ 5b. 家长通知单 ============
