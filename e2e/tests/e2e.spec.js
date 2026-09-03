@@ -369,6 +369,14 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(nums.nth(1)).toHaveText('20')
       await expect(nums.nth(2)).toHaveText('20')
       await expect.poll(async () => await page.locator('.stu-grid .stu-card').count(), { timeout: 10000 }).toBe(40)
+      // 导入弹窗（与成绩/家长导入统一样式：选择文件 + 格式提示）
+      await page.getByRole('button', { name: '导入', exact: true }).click()
+      const rosterImp = page.locator('.el-dialog', { hasText: '导入花名册' })
+      await expect(rosterImp).toBeVisible()
+      await expect(rosterImp.locator('.el-upload .el-button')).toBeVisible()
+      await expect(rosterImp.locator('.import-tip')).toContainText('学号')
+      await page.keyboard.press('Escape')
+      await expect(rosterImp).toBeHidden()
       // 搜索第一个真实学生 → 1 张
       await page.getByPlaceholder('搜索姓名/学号').fill(firstStudent)
       await expect.poll(async () => await page.locator('.stu-grid .stu-card').count(), { timeout: 10000 }).toBe(1)
@@ -514,8 +522,15 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(page.getByRole('button', { name: '沟通记录' })).toHaveCount(0)
       await expect(page.getByRole('button', { name: '清空记录' })).toHaveCount(0)
       await expect(page.locator('.el-card', { hasText: '家校沟通记录' })).toHaveCount(0)
-      // 家长 Excel 导入入口可见（API 级导入验证在临时测试生创建后做）
-      await expect(page.locator('.import-upload .el-button')).toBeVisible()
+      // 家长 Excel 导入：工具栏按钮 → 弹窗（选择文件 + 格式提示，与成绩/花名册导入统一样式）
+      await expect(page.getByRole('button', { name: /导入家长/ })).toBeVisible()
+      await page.getByRole('button', { name: /导入家长/ }).click()
+      const impDlg = page.locator('.el-dialog', { hasText: '导入家长联系方式' })
+      await expect(impDlg).toBeVisible()
+      await expect(impDlg.locator('.el-upload .el-button')).toBeVisible()
+      await expect(impDlg.locator('.import-tip')).toContainText('学号')
+      await page.keyboard.press('Escape')
+      await expect(impDlg).toBeHidden()
 
       await page.locator('.el-card', { hasText: '家长通讯录' }).getByRole('button', { name: /沟通/ }).first().click()
       const dlg = page.locator('.el-dialog', { hasText: '家校沟通管理' })

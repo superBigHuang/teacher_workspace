@@ -3,11 +3,7 @@
     <div class="page-toolbar">
       <h2 class="page-title">📞 家长联系方式</h2>
       <div class="spacer"></div>
-      <el-tooltip placement="bottom" content="表头：学号/父亲/父亲电话/母亲/母亲电话/住址（住址选填）。可直接用花名册导出的 Excel 补电话后导回，按学号更新已有学生">
-        <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls" class="import-upload">
-          <el-button :icon="FolderOpened" type="success" plain>📥 导入家长</el-button>
-        </el-upload>
-      </el-tooltip>
+      <el-button :icon="FolderOpened" type="success" plain @click="importDlg = true">📥 导入家长</el-button>
       <el-input v-model="keyword" placeholder="搜索学生/家长/电话" style="width:240px" clearable :prefix-icon="Search" @input="loadContacts" />
     </div>
 
@@ -36,6 +32,21 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 导入家长弹窗（与成绩/花名册导入统一样式：选择文件 + 格式提示） -->
+    <el-dialog v-model="importDlg" title="导入家长联系方式" width="520px">
+      <el-form label-width="80px">
+        <el-form-item label="家长文件">
+          <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls" :limit="1">
+            <el-button :icon="FolderOpened">选择 Excel 文件</el-button>
+          </el-upload>
+          <div class="import-tip">
+            支持 .xls / .xlsx。表头格式：<b>学号 | 住址 | 父亲 | 父亲电话 | 母亲 | 母亲电话</b>（住址可留空；可直接用花名册「导出」的 Excel 补上电话后导回）<br>
+            规则：<b>按学号匹配已有学生并更新</b>家长信息，不新建学生；学号找不到的行计入"未找到"，姓名列仅用于核对。
+          </div>
+        </el-form-item>
+      </el-form>
+    </el-dialog>
 
     <!-- 编辑家长联系方式弹窗（学号/姓名/性别只读带入，可改住址与父亲/母亲姓名电话；复用花名册保存接口） -->
     <el-dialog v-model="editVisible" title="✏️ 编辑家长联系方式" width="480px">
@@ -104,6 +115,7 @@ import http from '../api/http'
 
 const contacts = ref([])
 const keyword = ref('')
+const importDlg = ref(false)   // 导入家长弹窗
 
 /** Excel 导入家长联系方式：按学号更新已有学生的父母姓名/电话/住址（学生不存在则计数提示） */
 async function doImport({ file }) {
@@ -111,6 +123,7 @@ async function doImport({ file }) {
   fd.append('file', file)
   const r = await http.post('/parent/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
   ElMessage.success(`导入完成：更新 ${r.updated} 人，学号未找到 ${r.notFound} 人`)
+  importDlg.value = false
   loadContacts()
 }
 
@@ -191,7 +204,7 @@ async function delLog(id) {
 </script>
 
 <style scoped>
-.import-upload { margin-right: 10px; }
+.import-tip { margin-top: 8px; font-size: 12px; line-height: 1.8; color: #8a8fa3; background: #f6f8fc; border-radius: 8px; padding: 8px 12px; }
 .block { margin-bottom: 18px; }
 .block-title { margin: 0 0 12px; color: #5a5f72; }
 .parent-info { display: flex; align-items: center; gap: 12px; padding: 2px 0; font-size: 14px; }

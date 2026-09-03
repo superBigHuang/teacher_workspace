@@ -5,9 +5,7 @@
       <el-input v-model="keyword" placeholder="搜索姓名/学号" style="width:220px" clearable :prefix-icon="Search" @input="loadStudents" />
       <div class="spacer"></div>
       <el-button type="primary" :icon="Plus" @click="openAdd">添加学生</el-button>
-      <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls">
-        <el-button :icon="FolderOpened">导入</el-button>
-      </el-upload>
+      <el-button :icon="FolderOpened" @click="importDlg = true">导入</el-button>
       <el-button :icon="Download" @click="doExport">导出</el-button>
       <el-button type="danger" plain :icon="Delete" @click="doClear">清空</el-button>
     </div>
@@ -74,6 +72,21 @@
         <el-button @click="formVisible = false">取消</el-button>
         <el-button type="primary" @click="saveStudent">保存</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 导入弹窗（与成绩导入统一样式：选择文件 + 格式提示） -->
+    <el-dialog v-model="importDlg" title="导入花名册" width="520px">
+      <el-form label-width="90px">
+        <el-form-item label="花名册文件">
+          <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls" :limit="1">
+            <el-button :icon="FolderOpened">选择 Excel 文件</el-button>
+          </el-upload>
+          <div class="import-tip">
+            支持 .xls / .xlsx。表头格式：<b>学号 | 姓名 | 性别 | 住址 | 父亲 | 父亲电话 | 母亲 | 母亲电话</b>（住址与家长列可留空；可先点「导出」下载模板再填）<br>
+            规则：<b>学号、姓名、性别缺一不可</b>（性别须为男/女），信息不全的行跳过；同学号已存在则跳过，不覆盖已有学生。
+          </div>
+        </el-form-item>
+      </el-form>
     </el-dialog>
 
     <!-- 学生档案抽屉 -->
@@ -300,6 +313,7 @@ function fmtPetTime(t) { return String(t || '').replace('T', ' ').slice(5, 16) }
 
 const formVisible = ref(false)
 const editing = ref(null)
+const importDlg = ref(false)   // 导入花名册弹窗
 const form = reactive({ stuNo: '', name: '', gender: '男', address: '', parents: [
   { relation: '父亲', name: '', phone: '' },
   { relation: '母亲', name: '', phone: '' }
@@ -488,6 +502,7 @@ async function doImport(opt) {
   fd.append('file', opt.file)
   const r = await http.post('/roster/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
   ElMessage.success(`导入成功 ${r.added} 人，跳过重复 ${r.skipped} 人，信息不全未导 ${r.incomplete ?? 0} 人`)
+  importDlg.value = false
   loadStats(); loadStudents()
 }
 
@@ -508,6 +523,7 @@ async function doClear() {
 </script>
 
 <style scoped>
+.import-tip { margin-top: 8px; font-size: 12px; line-height: 1.8; color: #8a8fa3; background: #f6f8fc; border-radius: 8px; padding: 8px 12px; }
 .stat-row { margin-bottom: 16px; }
 .stat-card { height: 118px; }
 .stat-card .en { font-size: 12px; opacity: .85; letter-spacing: 1px; }
