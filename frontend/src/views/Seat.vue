@@ -13,6 +13,9 @@
       <el-button round :type="batchMode ? 'success' : 'warning'" @click="toggleBatch">
         {{ batchMode ? `✅ 完成批量（已选 ${selected.size}）` : '📝 批量评价' }}
       </el-button>
+      <el-button round :type="leaderMode ? 'success' : 'info'" @click="toggleLeaderMode">
+        {{ leaderMode ? '✅ 完成指派' : '👑 组长' }}
+      </el-button>
     </div>
 
     <div class="legend">
@@ -32,6 +35,14 @@
           选择评价项 →
         </el-button>
         <el-button size="small" text @click="selected.clear()">清空</el-button>
+      </div>
+    </transition>
+
+    <!-- 组长指派模式提示条 -->
+    <transition name="bar">
+      <div v-if="leaderMode" class="batch-bar">
+        <span>👑 指派模式：点座位设为<b>该列组长</b>（同列自动替换旧组长），再点该组长取消</span>
+        <el-button size="small" type="success" round @click="leaderMode = false">完成指派</el-button>
       </div>
     </transition>
 
@@ -58,13 +69,15 @@
            class="seat" :class="[seatClass(s), effNamePos, { 'star-today': !disp.simple && petOf(s)?.starToday }]"
            :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }"
            :data-sid="s.studentId || undefined"
-           :draggable="!!s.studentId && !batchMode"
+           :draggable="!!s.studentId && !batchMode && !leaderMode"
            @dragstart="onDragStart($event, s)" @dragover.prevent @drop="onDrop($event, s)"
            @pointerdown="onSeatDown($event, s)" @pointerup="onSeatUp($event)">
         <template v-if="s.studentId">
           <!-- 批量勾选在宠物块外：简易模式下批量评价仍可用 -->
           <el-checkbox v-if="batchMode" class="pick-box" :model-value="selected.has(s.studentId)"
             @click.stop @change="togglePick(s.studentId)" />
+          <!-- 组长 👑：常驻角标（含简易模式/代课看谁是组长），故放宠物块外；受显示开关控制，不挡点击 -->
+          <span v-if="s.studentId && disp.fields.leader && isLeader(s.studentId)" class="seat-leader">👑</span>
           <span class="seat-name">{{ s.name }}</span>
           <span v-if="disp.fields.stuNo && s.stuNo" class="seat-stuno">{{ s.stuNo }}</span>
           <!-- 宠物与天气特效（简易模式整块隐藏：img/☁️❄️🌈光环✨🩹🎓/飘字 全在其内） -->
@@ -424,6 +437,7 @@
           <el-checkbox value="lv">Lv 徽章</el-checkbox>
           <el-checkbox value="badge">毕业🎓角标</el-checkbox>
           <el-checkbox value="medal">🏅 奖牌</el-checkbox>
+          <el-checkbox value="leader">👑 组长</el-checkbox>
           <el-checkbox value="colLabel">行列标签</el-checkbox>
           <el-checkbox value="unseated">未排座学生区</el-checkbox>
         </el-checkbox-group>
@@ -508,7 +522,7 @@
                class="print-seat" :class="printSeatClass(s)"
                :style="{ gridRow: s.row + 1, gridColumn: displayCol(s.col) + 1 }">
             <template v-if="s.studentId">
-              <span class="print-name">{{ s.name }}</span>
+              <span class="print-name">{{ s.name }}<span v-if="disp.fields.leader && isLeader(s.studentId)" class="print-leader"> 👑</span></span>
               <span v-if="disp.fields.stuNo && s.stuNo" class="print-stuno">{{ s.stuNo }}</span>
             </template>
           </div>
@@ -548,11 +562,11 @@ const SKIN_STAGES = [
 ]
 
 // ==================== 显示偏好（setting 键 seat_display，账号级持久化） ====================
-/** 偏好默认值 = 现状界面（宠物模式、名字横排贴底、性别色/标签/角标/奖牌全开；打印黑白省墨默认开） */
+/** 偏好默认值 = 现状界面（宠物模式、名字横排贴底、性别色/标签/角标/奖牌/组长全开；打印黑白省墨默认开） */
 function dispDefault() {
   return {
     simple: 0,
-    fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
+    fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, leader: 1, colLabel: 1, unseated: 1 },
     namePos: 'h-bottom', // v-left 竖排贴左 | h-center 横排居中 | h-bottom 横排贴底（默认：宠物在上、姓名贴底）
     print: { flip: 0, mono: 1, withUnseated: 1 }
   }
@@ -561,7 +575,7 @@ const disp = reactive(dispDefault())
 const seatCfgDlg = ref(false)
 const printDlg = ref(false)
 /** 字段勾选的 key 顺序（el-checkbox-group 用） */
-const FIELD_KEYS = ['stuNo', 'gender', 'lv', 'badge', 'medal', 'colLabel', 'unseated']
+const FIELD_KEYS = ['stuNo', 'gender', 'lv', 'badge', 'medal', 'leader', 'colLabel', 'unseated']
 /** el-checkbox-group 双向绑定：勾选字段 key 数组 ↔ disp.fields 0/1 */
 const fieldChecks = computed({
   get: () => FIELD_KEYS.filter(k => disp.fields[k]),
@@ -734,6 +748,7 @@ onMounted(() => {
     if (action === 'pets.changed') { loadPets(); loadSeatMedals() }
   })
   loadSeatMedals()
+  loadLeaders()
 })
 onUnmounted(() => offRemote?.())
 
@@ -747,6 +762,37 @@ async function loadSeatMedals() {
 /** 取某生座位奖牌（无数据返回空数组） */
 function seatMedalsOf(sid) {
   return seatMedalsMap.value[sid] || []
+}
+
+// ==================== 列组长（👑；零表变更：组长 = committee 表 role='组长'，复用 /duty/committee 查询） ====================
+/** 指派模式：开启后点座位即设/取消该生所在列的组长（与批量评价互斥、禁用拖拽换座） */
+const leaderMode = ref(false)
+/** 组长学生 id 集合（来自 committee role='组长'；列归属由后端按座位实时推导） */
+const leaderIds = ref(new Set())
+/** 拉取组长集合；失败静默（角标为装饰，不影响座位主功能） */
+async function loadLeaders() {
+  try {
+    const list = await http.get('/duty/committee') || []
+    leaderIds.value = new Set(list.filter(c => c.role === '组长').map(c => c.studentId))
+  } catch { /* 静默 */ }
+}
+/** 某生是否为组长 */
+const isLeader = sid => leaderIds.value.has(sid)
+/** 切换指派模式（开启时若处于批量评价则一并关闭，两模式互斥） */
+function toggleLeaderMode() {
+  leaderMode.value = !leaderMode.value
+  if (leaderMode.value && batchMode.value) toggleBatch()
+}
+// 反向互斥：开启批量评价时关闭指派模式（避免点座位同时触发勾选与设组长）
+watch(batchMode, (v) => { if (v && leaderMode.value) leaderMode.value = false })
+/** 设/取消某生组长：后端按其当前座位列处理（同列旧组长自动替换；该生已是组长则取消） */
+async function toggleLeader(sid) {
+  try {
+    const r = await http.post('/seat/leader', { studentId: sid })
+    await loadLeaders()
+    if (r?.canceled) ElMessage.success('已取消组长')
+    else if (r?.col != null) ElMessage.success(`已设为第 ${r.col} 列组长 👑`)
+  } catch { /* 拦截器已弹后端 fail 消息（如"请先给该生安排座位"） */ }
 }
 
 /** 取座位上学生对应的宠物状态（/pet/pets 返回全班，含未领养） */
@@ -776,12 +822,14 @@ let downPos = null
 function onSeatDown(e, s) {
   downPos = { x: e.clientX, y: e.clientY, s }
 }
-function onSeatUp(e) {
+async function onSeatUp(e) {
   if (!downPos) return
   const { x, y, s } = downPos
   downPos = null
   if (Math.hypot(e.clientX - x, e.clientY - y) > 6) return
   if (!s.studentId) return
+  // 指派模式：点座位设/取消该列组长（优先于宠物弹窗；简易模式下也可指派）
+  if (leaderMode.value) { await toggleLeader(s.studentId); return }
   // 简易模式纯查看：点击不弹宠物窗（拖拽换座不受影响，位移阈值已先拦截）
   if (disp.simple) return
   onCardClick(petOf(s))
@@ -915,6 +963,12 @@ function onSeatUp(e) {
 .seat-flag.flag-grad {
   right: 8px; top: -8px; background: linear-gradient(135deg,#ffe28a,#f2a93a); color: #fff;
   border-radius: 9px; padding: 0 5px; font-size: 10px; font-weight: 800;
+}
+/* 组长 👑 角标：常驻（含简易模式，故元素在 .seat-pet 外）；右上角、层级高于宠物(4)与天气(5)，不挡点击/拖拽；
+   简易模式下 .seat-pet 整块隐藏、右上角无其他元素，👑 独占（代课老师看谁是组长的主场景） */
+.seat-leader {
+  position: absolute; top: 3px; right: 6px; font-size: 17px; line-height: 1; z-index: 6;
+  pointer-events: none; filter: drop-shadow(0 1px 2px rgba(180,140,30,.5));
 }
 .empty { font-size: 14px; }
 

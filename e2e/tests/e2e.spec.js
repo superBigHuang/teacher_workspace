@@ -143,13 +143,21 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       }
     } catch (e) { /* 忽略 */ }
     try {
+      // 列组长兜底清理：步骤 14 指派测试会在 admin 真实学生上建 committee role='组长' 记录，逐条删除（幂等、不阻断）；
+      // 严格只删 role='组长'，不碰班长/学习委员等真实班委
+      const cm = (await (await request.get(API + '/duty/committee', { headers: authHeader() })).json()).data || []
+      for (const c of cm) {
+        if (c.role === '组长') await request.delete(API + '/duty/committee/' + c.id, { headers: authHeader() })
+      }
+    } catch (e) { /* 忽略 */ }
+    try {
       // 座次表 v2：恢复 admin 真实布局；显示偏好始终写回默认 JSON（flip:simple 等必须归零，
       // 不能恢复"备份值"——备份可能在步骤 14 中途失败时已带 flip=1，会随每次运行自我延续污染）
       if (seatConfigBak) {
         await request.post(API + '/seat/config', { headers: authHeader(), data: seatConfigBak })
       }
       const dispDefault = JSON.stringify({
-        simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, colLabel: 1, unseated: 1 },
+        simple: 0, fields: { stuNo: 0, gender: 1, lv: 1, badge: 1, medal: 1, leader: 1, colLabel: 1, unseated: 1 },
         namePos: 'h-bottom', print: { flip: 0, mono: 1, withUnseated: 1 }
       })
       await request.put(API + '/settings/seat-display', {
@@ -1386,6 +1394,57 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.reload()
       await expect.poll(async () => page.locator('.seat .seat-pet-img').count(), { timeout: 10000 }).toBe(0)
 
+      // 14.5b 👑 列组长：指派模式设/同列替换/取消（当前为简易模式——👑 角标常驻、指派同样可用）
+      const leaderGrid = (await (await request.get(API + '/seat/grid', { headers: authHeader() })).json()).data
+      const byCol = {}
+      for (const s of leaderGrid.seats) if (s.studentId) (byCol[s.col] ||= []).push(s.studentId)
+      const colPair = Object.values(byCol).find(ids => ids.length >= 2)
+      expect(colPair, '座位表应存在至少 2 人的列').toBeTruthy()
+      const [sidA, sidB] = colPair
+      const crownOf = sid => page.locator(`.seat[data-sid="${sid}"] .seat-leader`)
+      // 工具栏按钮（限定 .page-toolbar，避开指派提示条内同名的"完成指派"按钮）
+      const leaderBtn = page.locator('.page-toolbar').getByRole('button', { name: /组长|完成指派/ })
+      await expect(leaderBtn).toContainText('组长')          // 未进入指派态
+      await leaderBtn.click()
+      await expect(leaderBtn).toContainText('完成指派')      // 进入指派模式：按钮文案切换
+      await expect(page.locator('.batch-bar', { hasText: '指派模式' })).toBeVisible()
+      await expect(page.locator('.seat[data-sid]').first()).toHaveAttribute('draggable', 'false') // 指派模式禁拖拽
+      // 点第一个座位 → 该生成为组长、出 👑
+      await page.locator(`.seat[data-sid="${sidA}"]`).click()
+      await expect.poll(async () => await crownOf(sidA).count(), { timeout: 8000 }).toBe(1)
+      // 点同列第二个 → 同列替换：第二个出 👑、第一个 👑 消失
+      await page.locator(`.seat[data-sid="${sidB}"]`).click()
+      await expect.poll(async () => await crownOf(sidB).count(), { timeout: 8000 }).toBe(1)
+      await expect.poll(async () => await crownOf(sidA).count(), { timeout: 8000 }).toBe(0)
+      // 再点第二个 → 取消、👑 消失
+      await page.locator(`.seat[data-sid="${sidB}"]`).click()
+      await expect.poll(async () => await crownOf(sidB).count(), { timeout: 8000 }).toBe(0)
+      // 重新点第一个，留一个组长供开关/打印断言
+      await page.locator(`.seat[data-sid="${sidA}"]`).click()
+      await expect.poll(async () => await crownOf(sidA).count(), { timeout: 8000 }).toBe(1)
+      // 退出指派模式
+      await leaderBtn.click()
+      await expect(leaderBtn).toContainText('组长')
+      await expect(page.locator('.batch-bar', { hasText: '指派模式' })).toBeHidden()
+
+      // 14.5c 👑 组长显示开关：默认开；取消勾选 → 👑 隐藏且刷新保持；重勾恢复（14.6 打印断言依赖开启）
+      await page.getByRole('button', { name: '座位设置' }).click()
+      let leaderDlg = page.locator('.el-dialog', { hasText: '座位设置' }).last()
+      await expect(leaderDlg).toBeVisible()
+      const leaderCheck = leaderDlg.locator('.el-checkbox', { hasText: '组长' })
+      await expect(leaderCheck.locator('.el-checkbox__input')).toHaveClass(/is-checked/)
+      await expect(crownOf(sidA)).toHaveCount(1)
+      await leaderCheck.click() // 取消勾选 → 👑 隐藏
+      await expect.poll(async () => await crownOf(sidA).count(), { timeout: 8000 }).toBe(0)
+      await leaderDlg.locator('.el-dialog__close').last().click()
+      await page.reload() // 刷新保持隐藏
+      await expect.poll(async () => await page.locator('.seat .seat-leader').count(), { timeout: 10000 }).toBe(0)
+      await page.getByRole('button', { name: '座位设置' }).click()
+      leaderDlg = page.locator('.el-dialog', { hasText: '座位设置' }).last()
+      await leaderDlg.locator('.el-checkbox', { hasText: '组长' }).click() // 重勾恢复
+      await expect.poll(async () => await page.locator(`.seat[data-sid="${sidA}"] .seat-leader`).count(), { timeout: 8000 }).toBe(1)
+      await leaderDlg.locator('.el-dialog__close').last().click()
+
       // 14.6 🖨打印弹窗：倒转开关 → 预览简图与打印区带 flip class；黑白默认开 → mono
       await page.getByRole('button', { name: '打印' }).click()
       const pDlg = page.locator('.el-dialog', { hasText: '打印座次表' }).last()
@@ -1394,6 +1453,9 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       // 奖牌仅屏幕展示：打印区不含奖牌
       await expect(page.locator('.seat-print-area .seat-medals')).toHaveCount(0)
       await expect(page.locator('.seat-print-area .badge-icon')).toHaveCount(0)
+      // 组长 👑 打印：设了组长的座位，打印区姓名旁带 👑（受同一显示开关控制，14.5c 末已重勾开启）
+      await expect.poll(async () =>
+        await page.locator('.seat-print-area .print-leader').count(), { timeout: 5000 }).toBeGreaterThanOrEqual(1)
       // 预览缩略：行号 3 个 + 两头列号 4×2=8 个；格内为真实学生姓名（不再是全"张三"）
       await expect(pDlg.locator('.pv-row')).toHaveCount(3)
       await expect(pDlg.locator('.pv-col')).toHaveCount(8)

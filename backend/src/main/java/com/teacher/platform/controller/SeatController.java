@@ -189,6 +189,52 @@ public class SeatController extends BaseController {
         return Result.ok();
     }
 
+    /**
+     * 设/取消列组长（零表变更：组长 = committee 表一条 role='组长' 记录，自动进班委名单/评语职务/班委担当成就）。
+     * 组 = 座位的一"列"，组长属哪列按其当前座位 col_no 实时推导（换座/随机排座后 👑 自动跟人）。
+     * 一列至多一个组长：该生已是组长则取消；否则删掉同列旧组长后再任命。
+     */
+    @PostMapping("/leader")
+    public Result<Map<String, Object>> setLeader(@RequestBody Map<String, Object> body) {
+        Long uid = uid();
+        Long cid = homeroomClassId();
+        Long sid = body.get("studentId") == null ? null : Long.valueOf(String.valueOf(body.get("studentId")));
+        if (sid == null) return Result.fail("缺少学生");
+        // 该生当前座位所在列（未排座则无列可属）
+        List<Map<String, Object>> seat = jdbc.queryForList(
+                "SELECT col_no FROM seat_assignment WHERE user_id=? AND class_id=? AND student_id=?",
+                uid, cid, sid);
+        if (seat.isEmpty()) return Result.fail("请先给该生安排座位");
+        int col = ((Number) seat.get(0).get("col_no")).intValue();
+        // 已是组长 → 取消
+        List<Map<String, Object>> mine = jdbc.queryForList(
+                "SELECT id FROM committee WHERE user_id=? AND student_id=? AND role='组长'", uid, sid);
+        if (!mine.isEmpty()) {
+            jdbc.update("DELETE FROM committee WHERE id=? AND user_id=?",
+                    ((Number) mine.get(0).get("id")).longValue(), uid);
+            return Result.ok(Map.of("canceled", true));
+        }
+        // 任命为该列组长：先删同列所有学生的旧组长记录（保证一列一个）
+        List<Map<String, Object>> colMates = jdbc.queryForList(
+                "SELECT student_id FROM seat_assignment WHERE user_id=? AND class_id=? AND col_no=?",
+                uid, cid, col);
+        if (!colMates.isEmpty()) {
+            List<Long> mateIds = colMates.stream()
+                    .map(m -> ((Number) m.get("student_id")).longValue()).toList();
+            String in = String.join(",", mateIds.stream().map(x -> "?").toList());
+            List<Object> args = new ArrayList<>();
+            args.add(uid);
+            args.addAll(mateIds);
+            jdbc.update("DELETE FROM committee WHERE user_id=? AND role='组长' AND student_id IN (" + in + ")",
+                    args.toArray());
+        }
+        jdbc.update("INSERT INTO committee(user_id,student_id,role) VALUES(?,?, '组长')", uid, sid);
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("canceled", false);
+        res.put("col", col);
+        return Result.ok(res);
+    }
+
     private Long queryStudent(Long uid, Long cid, int r, int c) {
         List<Map<String, Object>> l = jdbc.queryForList(
                 "SELECT student_id FROM seat_assignment WHERE user_id=? AND class_id=? AND row_no=? AND col_no=?",
