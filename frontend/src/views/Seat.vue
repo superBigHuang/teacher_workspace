@@ -54,7 +54,13 @@
       <div class="board-corner"></div>
       <template v-if="disp.fields.colLabel">
         <div v-for="c in cols" :key="'col'+c" class="col-label"
-             :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">第{{ c }}列</div>
+             :style="{ gridRow: 1, gridColumn: displayCol(c) + 1 }">
+          <!-- 批量评价模式：列头变整列勾选框（全选/半选/取消） -->
+          <el-checkbox v-if="batchMode" class="col-pick"
+                       :model-value="colAllChecked(c)" :indeterminate="colIndeterminate(c)"
+                       @click.stop @change="toggleCol(c)">第{{ c }}列</el-checkbox>
+          <template v-else>第{{ c }}列</template>
+        </div>
         <div v-for="aisleCol in aisleDisplayColumns" :key="'al'+aisleCol" class="col-label aisle-label"
              :style="{ gridRow: 1, gridColumn: aisleCol + 1 }">过道</div>
         <!-- 行名（每行左侧） -->
@@ -740,6 +746,31 @@ const {
   loadPets
 } = usePets()
 
+// ==================== 批量评价：按列全选（列头勾选框） ====================
+/** 某逻辑列已排座的学生 id 列表（未排座空位不计） */
+function colStudentIds(c) {
+  return seats.value.filter(s => s.col === c && s.studentId).map(s => s.studentId)
+}
+/** 列头勾选态：该列有学生且全部已选中 */
+function colAllChecked(c) {
+  const ids = colStudentIds(c)
+  return ids.length > 0 && ids.every(id => selected.value.has(id))
+}
+/** 列头半选态：该列选中了一部分（>0 且未满） */
+function colIndeterminate(c) {
+  const ids = colStudentIds(c)
+  const n = ids.filter(id => selected.value.has(id)).length
+  return n > 0 && n < ids.length
+}
+/** 点列头：未全选则整列加入，已全选则整列移除（复制新 Set 再赋值以触发响应式） */
+function toggleCol(c) {
+  const ids = colStudentIds(c)
+  const next = new Set(selected.value)
+  if (colAllChecked(c)) ids.forEach(id => next.delete(id))
+  else ids.forEach(id => next.add(id))
+  selected.value = next
+}
+
 // 手机遥控：手机端加减分/兑换等写操作后服务器广播 pets.changed，PC 静默重拉宠物状态
 // （遥控在线期间 loadPets 的 pending 进化攒入待播列表，不打断投影；spotlight 高亮样式见 .remote-spot）
 let offRemote = null
@@ -857,6 +888,8 @@ async function onSeatUp(e) {
   font-size: 12px; font-weight: 800; color: #a08a78;
 }
 .col-label.aisle-label { color: #c3b8a8; font-weight: 700; }
+.col-pick { height: auto; margin-right: 0; --el-checkbox-font-size: 12px; }
+.col-pick :deep(.el-checkbox__label) { font-size: 12px; font-weight: 800; color: #a08a78; padding-left: 6px; }
 .row-label {
   display: flex; align-items: center; justify-content: center;
   writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 3px;

@@ -26,6 +26,7 @@ let seatConfigBak = null  // 座次表 v2：admin 真实座次布局备份（row
 // 注：显示偏好 seat_display 不做备份/恢复——步骤 14 会逐项翻转，afterAll 始终写回默认 JSON，
 // 避免"中途失败时备份已带 flip=1"导致污染随每次运行自我延续
 let e2ePushWrote = false  // 消息推送：E2E 是否写过测试 webhook（仅 admin 未配置时才写；afterAll 仅此时清理，防误删真实推送配置）
+let periodBaselineIds = [] // 课表节次：开跑前现有节次 id（全局共享表，新增节次 step 后 afterAll 兜底删除）
 
 const nav = (page, name) => page.locator('.nav-item', { hasText: name }).first()
 const authHeader = () => ({ Authorization: 'Bearer ' + token })
@@ -71,6 +72,9 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     // 座次表 v2：备份 admin 真实座次布局与显示偏好（步骤 14 会改，afterAll 必须恢复）
     const cfg = (await (await request.get(API + '/seat/config', { headers: authHeader() })).json()).data
     seatConfigBak = { rows: cfg.rows, cols: cfg.cols, aisles: cfg.aisles || [] }
+    // 课表节次基线（全局 period 表；新增节次 step 与 afterAll 据此 diff 清理）
+    periodBaselineIds = ((await (await request.get(API + '/timetable/periods', { headers: authHeader() })).json()).data || [])
+      .map(p => p.id)
   })
 
   test.afterAll(async ({ request }) => {
@@ -126,6 +130,18 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     try {
       // 恢复 AI 启用（11c 步骤临时关闭走模板；admin 为真实使用账号）
       await request.put(API + '/ai/config', { headers: authHeader(), data: { enabled: true } })
+    } catch (e) { /* 忽略 */ }
+    try {
+      // 课表节次兜底：删除 E2E 新增的节次（period 为全局共享表），顺延时长恢复默认 10/40
+      const now = (await (await request.get(API + '/timetable/periods', { headers: authHeader() })).json()).data || []
+      for (const p of now) {
+        if (!periodBaselineIds.includes(p.id)) {
+          await request.delete(API + '/timetable/period/' + p.id, { headers: authHeader() })
+        }
+      }
+      await request.post(API + '/dashboard/settings', {
+        headers: authHeader(), data: { period_break_min: '10', period_class_min: '40' },
+      })
     } catch (e) { /* 忽略 */ }
     try {
       // 消息推送清理：仅当 E2E 写过测试 webhook 才清（admin 已配真实渠道时全程跳过，掩码无法备份还原）
@@ -572,6 +588,114 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         await page.locator('.legend-chip').count(), { timeout: 10000 }).toBeGreaterThanOrEqual(10)
       await expect.poll(async () =>
         await page.locator('.el-tabs__item').count(), { timeout: 10000 }).toBeGreaterThanOrEqual(2)
+    })
+
+    // ============ 7b. 自定义节次：新增自动命名/时间顺延 + 时间选择框 + 时长可配 ============
+    await test.step('课程表：自定义节次新增自动命名与时间顺延、时间选择框、课间/上课时长可配', async () => {
+      const toMin = hhmm => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m }
+      const fmt = min => { const x = ((Math.round(min) % 1440) + 1440) % 1440; return String(Math.floor(x / 60)).padStart(2, '0') + ':' + String(x % 60).padStart(2, '0') }
+      const listApi = async () => (await (await request.get(API + '/timetable/periods', { headers: authHeader() })).json()).data || []
+      const beforeIds = (await listApi()).map(p => p.id)
+      try {
+        await nav(page, '课程表').click()
+        await page.getByRole('button', { name: '自定义节次' }).click()
+        const dlg = page.locator('.el-dialog', { hasText: '自定义节次' })
+        await expect(dlg).toBeVisible()
+        // 开始/结束为时间选择框（el-time-picker 根 class 含 el-date-editor），非文本输入
+        await expect(dlg.locator('.el-date-editor').first()).toBeVisible()
+        // 时长配置：课间 / 每节上课 两个 el-input-number
+        const nums = dlg.locator('.el-input-number')
+        await expect(nums).toHaveCount(2)
+
+        const list0 = await listApi()
+        const lastEnd = list0[list0.length - 1].endTime
+        const maxN = list0.reduce((m, p) => {
+          const mt = String(p.name || '').match(/^第(\d+)节$/); return mt ? Math.max(m, Number(mt[1])) : m
+        }, 0)
+        // 默认课间 10 / 上课 40：点新增节次
+        await dlg.getByRole('button', { name: '新增节次' }).click()
+        const expStart = fmt(toMin(lastEnd) + 10)
+        const expEnd = fmt(toMin(expStart) + 40)
+        await expect.poll(async () => {
+          const nw = (await listApi()).find(p => !beforeIds.includes(p.id))
+          return nw ? `${nw.name}|${nw.startTime}|${nw.endTime}` : ''
+        }, { timeout: 10000 }).toBe(`第${maxN + 1}节|${expStart}|${expEnd}`)
+
+        // 改时长：课间 15、上课 45（fill + Tab 触发 @change 保存）
+        const numInputs = nums.locator('input')
+        await numInputs.nth(0).fill('15'); await page.keyboard.press('Tab')
+        await numInputs.nth(1).fill('45'); await page.keyboard.press('Tab')
+        await expect(page.locator('.el-message--success').first()).toBeVisible({ timeout: 5000 })
+        // 再新增一节：基准为上一新节结束，按 15/45 顺延
+        const newLastEnd = (await listApi()).find(p => p.name === `第${maxN + 1}节`).endTime
+        await dlg.getByRole('button', { name: '新增节次' }).click()
+        const expStart2 = fmt(toMin(newLastEnd) + 15)
+        const expEnd2 = fmt(toMin(expStart2) + 45)
+        await expect.poll(async () => {
+          const second = (await listApi()).find(p => p.name === `第${maxN + 2}节`)
+          return second ? `${second.startTime}|${second.endTime}` : ''
+        }, { timeout: 10000 }).toBe(`${expStart2}|${expEnd2}`)
+        // 时长已持久化到设置
+        const saved = (await (await request.get(API + '/dashboard/settings', { headers: authHeader() })).json()).data
+        expect(String(saved.period_break_min)).toBe('15')
+        expect(String(saved.period_class_min)).toBe('45')
+        await page.keyboard.press('Escape')
+      } finally {
+        // 清理本 step 新增节次 + 恢复时长默认（afterAll 另有同款兜底）
+        for (const p of await listApi()) {
+          if (!beforeIds.includes(p.id)) await request.delete(API + '/timetable/period/' + p.id, { headers: authHeader() })
+        }
+        await request.post(API + '/dashboard/settings', {
+          headers: authHeader(), data: { period_break_min: '10', period_class_min: '40' },
+        })
+      }
+    })
+
+    // ============ 7c. 座次表宠物园：批量评价列头按列全选/半选/取消 ============
+    await test.step('座次表：批量评价列头勾选框按列全选、半选、取消', async () => {
+      await page.goto('/seat')
+      await page.getByRole('button', { name: /批量评价/ }).click()
+      // 列头勾选框出现（棋盘内每列一个），初始已选 0
+      const colPicks = page.locator('.board-grid .col-pick')
+      await expect.poll(async () => await colPicks.count(), { timeout: 10000 }).toBeGreaterThan(0)
+      const pickNum = page.locator('.pick-num')
+      await expect(pickNum).toHaveText('0')
+      // 找一个有学生的列：逐列点列头直到已选数 > 0（空列点了不选中）
+      let chosen = -1
+      const colCount = await colPicks.count()
+      for (let i = 0; i < colCount; i++) {
+        await colPicks.nth(i).click()
+        if (Number(await pickNum.innerText()) > 0) { chosen = i; break }
+      }
+      expect(chosen).toBeGreaterThanOrEqual(0)
+      // 该列头为全选态
+      await expect(colPicks.nth(chosen)).toHaveClass(/is-checked/)
+      // 再点取消 → 已选归 0、列头非全选
+      await colPicks.nth(chosen).click()
+      await expect.poll(async () => await pickNum.innerText(), { timeout: 5000 }).toBe('0')
+      await expect(colPicks.nth(chosen)).not.toHaveClass(/is-checked/)
+      // 半选：找一列 ≥2 名学生，全选后取消其中 1 个座位 → 该列头变半选
+      let bigCol = -1
+      for (let i = 0; i < colCount; i++) {
+        await colPicks.nth(i).click()               // 选该列，读该列人数
+        const n = Number(await pickNum.innerText())
+        await colPicks.nth(i).click()               // 取消回 0
+        if (n >= 2) { bigCol = i; break }
+      }
+      expect(bigCol).toBeGreaterThanOrEqual(0)
+      await colPicks.nth(bigCol).click()            // 全选该列
+      const total = Number(await pickNum.innerText())
+      expect(total).toBeGreaterThanOrEqual(2)
+      // 取消该列中 1 个已勾选座位（未破壳蛋图会拦截真实点击，用 dispatchEvent 直接触发 checkbox）
+      const checkedBox = page.locator('.board-grid .seat .pick-box.is-checked').first()
+      await expect(checkedBox).toBeVisible()
+      await checkedBox.dispatchEvent('click')
+      await expect.poll(async () => await pickNum.innerText(), { timeout: 5000 }).toBe(String(total - 1))
+      // 半选态：Element Plus 的 is-indeterminate class 在内部 .el-checkbox__input 上（外层 label 体现为 aria-checked=mixed）
+      await expect(colPicks.nth(bigCol).locator('.el-checkbox__input')).toHaveClass(/is-indeterminate/)
+      await expect(colPicks.nth(bigCol)).toHaveAttribute('aria-checked', 'mixed')
+      // 退出批量模式（纯前端选择，不提交评价、不写库）
+      await page.getByRole('button', { name: /完成批量/ }).click()
     })
 
     // ============ 8. 待办事项 ============

@@ -5,7 +5,7 @@
       <el-button text :icon="Edit" @click="renameClass">编辑班级名</el-button>
       <el-button text :icon="Plus" @click="addClass">添加任课班</el-button>
       <div class="spacer"></div>
-      <el-button :icon="Setting" @click="periodDlg = true">自定义节次</el-button>
+      <el-button :icon="Setting" @click="openPeriodDlg">自定义节次</el-button>
       <el-button :icon="Collection" @click="subjectDlg = true">管理科目</el-button>
       <el-button type="danger" plain :icon="Delete" @click="clearGrid">清空</el-button>
     </div>
@@ -80,11 +80,17 @@
     </el-dialog>
 
     <!-- 节次管理 -->
-    <el-dialog v-model="periodDlg" title="自定义节次" width="560px">
+    <el-dialog v-model="periodDlg" title="自定义节次" width="580px">
+      <!-- 新增节次的时间顺延规则：课间/每节上课 分钟（存个人设置，缺省 10/40） -->
+      <div class="period-cfg">
+        <span class="pcfg-label">新增节次顺延：</span>
+        <span>课间 <el-input-number v-model="breakMin" :min="0" :max="60" size="small" controls-position="right" class="pcfg-num" @change="savePeriodCfg" /> 分钟</span>
+        <span>每节上课 <el-input-number v-model="classMin" :min="10" :max="120" size="small" controls-position="right" class="pcfg-num" @change="savePeriodCfg" /> 分钟</span>
+      </div>
       <el-table :data="periods" size="small" max-height="360">
         <el-table-column prop="name" label="节次" width="110" />
-        <el-table-column label="开始" width="110"><template #default="{ row }"><el-input v-model="row.startTime" size="small" @change="updPeriod(row)" /></template></el-table-column>
-        <el-table-column label="结束" width="110"><template #default="{ row }"><el-input v-model="row.endTime" size="small" @change="updPeriod(row)" /></template></el-table-column>
+        <el-table-column label="开始" width="120"><template #default="{ row }"><el-time-picker v-model="row.startTime" format="HH:mm" value-format="HH:mm" size="small" class="period-time" @change="updPeriod(row)" /></template></el-table-column>
+        <el-table-column label="结束" width="120"><template #default="{ row }"><el-time-picker v-model="row.endTime" format="HH:mm" value-format="HH:mm" size="small" class="period-time" @change="updPeriod(row)" /></template></el-table-column>
         <el-table-column label="课间" width="70"><template #default="{ row }"><el-switch v-model="row.isBreak" :active-value="1" :inactive-value="0" @change="updPeriod(row)" /></template></el-table-column>
         <el-table-column label="操作" width="70"><template #default="{ row }"><el-button type="danger" text size="small" @click="delPeriod(row)">删除</el-button></template></el-table-column>
       </el-table>
@@ -193,8 +199,42 @@ async function delSubject(row) {
 }
 
 // 节次
+/** HH:mm 字符串 → 分钟数；分钟数 → HH:mm（跨天自动进位/回绕），仅用于新增节次的时间顺延 */
+function toMin(hhmm) { const [h, m] = String(hhmm || '0:0').split(':').map(Number); return h * 60 + (m || 0) }
+function toHHmm(min) { const x = ((Math.round(min) % 1440) + 1440) % 1440; return String(Math.floor(x / 60)).padStart(2, '0') + ':' + String(x % 60).padStart(2, '0') }
+
+// 新增节次的顺延时长（个人设置 period_break_min/period_class_min，缺省课间 10 / 上课 40）
+const breakMin = ref(10)
+const classMin = ref(40)
+async function openPeriodDlg() {
+  periodDlg.value = true
+  try {
+    const s = await http.get('/dashboard/settings')
+    breakMin.value = Number(s.period_break_min) || 10
+    classMin.value = Number(s.period_class_min) || 40
+  } catch (e) { /* 读取失败用默认值 */ }
+}
+async function savePeriodCfg() {
+  await http.post('/dashboard/settings', {
+    period_break_min: String(breakMin.value), period_class_min: String(classMin.value)
+  })
+  ElMessage.success('已保存顺延时长')
+}
+
 async function addPeriod() {
-  await http.post('/timetable/period', { name: '第X节', startTime: '00:00', endTime: '00:45', isBreak: 0 })
+  // 序号：接续现有「第 N 节」最大序号 +1（早自习/午休等非「第N节」命名不占序号）
+  let maxN = 0
+  for (const p of periods.value) {
+    const mt = String(p.name || '').match(/^第(\d+)节$/)
+    if (mt) maxN = Math.max(maxN, Number(mt[1]))
+  }
+  const name = '第' + (maxN + 1) + '节'
+  // 时间顺延：开始 = 最后一个节次(按 sort，含课间)的结束 + 课间；一个节次都没有时从 08:00 起
+  const last = periods.value.length ? periods.value[periods.value.length - 1] : null
+  const start = last ? toMin(last.endTime) + breakMin.value : 8 * 60
+  const startTime = toHHmm(start)
+  const endTime = toHHmm(start + classMin.value)
+  await http.post('/timetable/period', { name, startTime, endTime, isBreak: 0 })
   periods.value = await http.get('/timetable/periods')
   await loadGrid()
 }
@@ -239,4 +279,8 @@ async function delPeriod(row) {
 .pick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .pick-chip { color: #fff; border-radius: 10px; padding: 12px; text-align: center; cursor: pointer; font-weight: 600; }
 .mt { margin-top: 12px; }
+.period-cfg { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; color: #5a5f72; }
+.period-cfg .pcfg-label { font-weight: 700; color: #7a7f92; }
+.period-cfg .pcfg-num { width: 92px; margin: 0 2px; }
+.period-time { width: 104px; }
 </style>
