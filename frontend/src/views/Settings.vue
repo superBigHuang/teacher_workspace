@@ -463,11 +463,14 @@ onMounted(load)
 .page-head h2 { margin: 0 0 4px; color: #6b5b73; }
 .page-head .tip { color: #b7a6b8; margin: 0 0 18px; font-size: 13px; }
 
-.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+/* 两列瀑布流（CSS columns）：卡片按自身高度紧凑排列，不再因同行最高卡片撑开大空隙；
+   宽卡片用 column-span:all 跨两列。860px 以下单列 */
+.cards { columns: 2; column-gap: 18px; }
 .candy-card {
-  background: #fff; border-radius: 22px; padding: 22px 24px;
+  background: #fff; border-radius: 22px; padding: 22px 24px; margin-bottom: 18px;
   box-shadow: 0 10px 28px rgba(200,180,200,.18);
   border: 3px solid #fff; position: relative; overflow: hidden;
+  break-inside: avoid; -webkit-column-break-inside: avoid;
 }
 .candy-card::before {
   content: ''; position: absolute; top: -34px; right: -34px; width: 110px; height: 110px;
@@ -522,8 +525,8 @@ onMounted(load)
 .ai-test-result { margin-bottom: 12px; }
 .privacy-tip { color: #b7a6b8; font-size: 12px; line-height: 1.6; margin: 4px 0 0; }
 
-/* 消息推送卡（跨两列） */
-.candy-card.wide { grid-column: 1 / -1; }
+/* 消息推送卡（瀑布流中跨两列） */
+.candy-card.wide { column-span: all; -webkit-column-span: all; }
 .push-card::before { background: #ffe0c9; }
 .push-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .push-title { display: flex; align-items: center; gap: 8px; }
@@ -538,5 +541,5 @@ onMounted(load)
 .push-events { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .push-save { width: auto; min-width: 220px; }
 
-@media (max-width: 860px) { .cards { grid-template-columns: 1fr; } }
+@media (max-width: 860px) { .cards { columns: 1; } }
 </style>

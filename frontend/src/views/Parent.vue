@@ -3,6 +3,11 @@
     <div class="page-toolbar">
       <h2 class="page-title">📞 家长联系方式</h2>
       <div class="spacer"></div>
+      <el-tooltip placement="bottom" content="表头：学号/父亲/父亲电话/母亲/母亲电话/住址（住址选填）。可直接用花名册导出的 Excel 补电话后导回，按学号更新已有学生">
+        <el-upload :show-file-list="false" :http-request="doImport" accept=".xlsx,.xls" class="import-upload">
+          <el-button :icon="FolderOpened" type="success" plain>📥 导入家长</el-button>
+        </el-upload>
+      </el-tooltip>
       <el-input v-model="keyword" placeholder="搜索学生/家长/电话" style="width:240px" clearable :prefix-icon="Search" @input="loadContacts" />
     </div>
 
@@ -94,11 +99,20 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Search, FolderOpened } from '@element-plus/icons-vue'
 import http from '../api/http'
 
 const contacts = ref([])
 const keyword = ref('')
+
+/** Excel 导入家长联系方式：按学号更新已有学生的父母姓名/电话/住址（学生不存在则计数提示） */
+async function doImport({ file }) {
+  const fd = new FormData()
+  fd.append('file', file)
+  const r = await http.post('/parent/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  ElMessage.success(`导入完成：更新 ${r.updated} 人，学号未找到 ${r.notFound} 人`)
+  loadContacts()
+}
 
 const dlg = ref(false)
 const cur = ref(null)
@@ -177,6 +191,7 @@ async function delLog(id) {
 </script>
 
 <style scoped>
+.import-upload { margin-right: 10px; }
 .block { margin-bottom: 18px; }
 .block-title { margin: 0 0 12px; color: #5a5f72; }
 .parent-info { display: flex; align-items: center; gap: 12px; padding: 2px 0; font-size: 14px; }

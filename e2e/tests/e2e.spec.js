@@ -258,9 +258,9 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(pushCard.locator('.el-checkbox', { hasText: '待办到期' })).toBeVisible()
       await expect(pushCard.locator('.el-checkbox', { hasText: '学生成就早报' })).toBeVisible()
       await expect(pushCard.locator('.el-checkbox.is-disabled', { hasText: '即将支持' }).first()).toBeVisible()
-      // .cards align-items:start（修密码卡大片留白）
-      const cardsAlign = await page.locator('.cards').evaluate(el => getComputedStyle(el).alignItems)
-      expect(cardsAlign).toBe('start')
+      // .cards 两列瀑布流（卡片紧凑紧挨，修豆腐块松散/密码卡大片留白）
+      const cardsCols = await page.locator('.cards').evaluate(el => getComputedStyle(el).columnCount)
+      expect(cardsCols).toBe('2')
 
       // 学期起止日期保存 + 学期素材聚合（评语/通知单/档案/请假共用底层）
       const upTerm = await request.put(API + '/settings/profile', {
@@ -514,6 +514,8 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(page.getByRole('button', { name: '沟通记录' })).toHaveCount(0)
       await expect(page.getByRole('button', { name: '清空记录' })).toHaveCount(0)
       await expect(page.locator('.el-card', { hasText: '家校沟通记录' })).toHaveCount(0)
+      // 家长 Excel 导入入口可见（API 级导入验证在临时测试生创建后做）
+      await expect(page.locator('.import-upload .el-button')).toBeVisible()
 
       await page.locator('.el-card', { hasText: '家长通讯录' }).getByRole('button', { name: /沟通/ }).first().click()
       const dlg = page.locator('.el-dialog', { hasText: '家校沟通管理' })
@@ -601,6 +603,41 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       })
       testStudentId = (await resp.json()).data
       expect(testStudentId).toBeTruthy()
+    })
+
+    // ============ 9b. 家长联系方式 Excel 导入（按学号 upsert，临时学生零污染） ============
+    await test.step('家长联系方式：Excel 导入按学号更新父母电话/住址，学号不存在计数', async () => {
+      const aoa = [
+        ['学号', '姓名', '住址', '父亲', '父亲电话', '母亲', '母亲电话'],
+        ['999', 'E2E测试生', 'E2E导入住址', 'E2E爸爸', '13800000001', 'E2E妈妈', '13800000002'],
+        ['999999', '不存在的学生', '', 'x', '1', '', ''],
+      ]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '家长')
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+      const imp = await request.post(API + '/parent/import', {
+        headers: authHeader(),
+        multipart: {
+          file: {
+            name: '家长.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            buffer,
+          },
+        },
+      })
+      const impBody = await imp.json()
+      expect(impBody.code).toBe(200)
+      expect(impBody.data.updated).toBe(1)
+      expect(impBody.data.notFound).toBe(1)
+      // 通讯录里临时学生家长信息已更新
+      const contacts = (await (await request.get(API + '/parent/contacts',
+        { headers: authHeader(), params: { keyword: 'E2E测试生' } })).json()).data
+      const row = contacts.find(c => c.stu_no === '999')
+      expect(row).toBeTruthy()
+      expect(row.address).toContain('E2E导入住址')
+      const phones = (row.parents || []).map(p => p.phone).join(',')
+      expect(phones).toContain('13800000001')
+      expect(phones).toContain('13800000002')
     })
 
     // ============ 10. 工作台速记（考勤/纪律/沟通/待办 多归类） ============

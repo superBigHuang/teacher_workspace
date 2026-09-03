@@ -1,8 +1,10 @@
 package com.teacher.platform.controller;
 
 import com.teacher.platform.common.Result;
+import org.apache.poi.ss.usermodel.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.*;
 
@@ -112,6 +114,81 @@ public class CommController extends BaseController {
                 uid(), sid, str(body.getOrDefault("relation", "其他")),
                 str(body.get("name")), str(body.get("phone")));
         return Result.ok(jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class));
+    }
+
+    /**
+     * Excel 导入家长联系方式：表头支持 学号/住址/父亲/父亲电话/母亲/母亲电话（姓名列仅给老师核对，不参与匹配）。
+     * 与花名册导入不同——学生已在花名册中，这里按"学号"找已有学生并【更新】家长信息：
+     * 住址非空则更新；父亲/母亲按 (学生,关系) upsert（姓名电话全空的行跳过）；学号找不到计入 notFound。
+     * 可直接用花名册导出的 Excel 补充电话后导回。
+     */
+    @PostMapping("/import")
+    public Result<Map<String, Object>> importParents(@RequestParam("file") MultipartFile file) throws Exception {
+        Long uid = uid();
+        Workbook wb = WorkbookFactory.create(file.getInputStream());
+        Sheet sheet = wb.getSheetAt(0);
+        Row header = sheet.getRow(0);
+        Map<String, Integer> col = new HashMap<>();
+        for (Cell c : header) {
+            col.put(getString(c).trim(), c.getColumnIndex());
+        }
+        int updated = 0, notFound = 0;
+        for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) continue;
+            String stuNo = cell(row, col, "学号");
+            if (stuNo.isBlank()) continue;   // 整行空白/无学号跳过
+            List<Long> ids = jdbc.queryForList(
+                    "SELECT id FROM student WHERE user_id=? AND stu_no=? ORDER BY id LIMIT 1",
+                    Long.class, uid, stuNo);
+            if (ids.isEmpty()) { notFound++; continue; }
+            Long sid = ids.get(0);
+            String address = cell(row, col, "住址");
+            if (!address.isBlank()) {
+                jdbc.update("UPDATE student SET address=? WHERE id=? AND user_id=?", address, sid, uid);
+            }
+            upsertParent(uid, sid, "父亲", cell(row, col, "父亲"), cell(row, col, "父亲电话"));
+            upsertParent(uid, sid, "母亲", cell(row, col, "母亲"), cell(row, col, "母亲电话"));
+            updated++;
+        }
+        wb.close();
+        return Result.ok(Map.of("updated", updated, "notFound", notFound));
+    }
+
+    /** 家长 upsert：姓名+电话全空跳过；已有同关系记录则更新，否则新增 */
+    private void upsertParent(Long uid, Long sid, String relation, String name, String phone) {
+        if (name.isBlank() && phone.isBlank()) return;
+        Integer cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM parent_contact WHERE user_id=? AND student_id=? AND relation=?",
+                Integer.class, uid, sid, relation);
+        if (cnt != null && cnt > 0) {
+            jdbc.update("UPDATE parent_contact SET name=?, phone=? WHERE user_id=? AND student_id=? AND relation=?",
+                    name, phone, uid, sid, relation);
+        } else {
+            jdbc.update("INSERT INTO parent_contact(user_id,student_id,relation,name,phone) VALUES(?,?,?,?,?)",
+                    uid, sid, relation, name, phone);
+        }
+    }
+
+    private String cell(Row row, Map<String, Integer> col, String key) {
+        Integer idx = col.get(key);
+        if (idx == null) return "";
+        Cell c = row.getCell(idx);
+        return c == null ? "" : getString(c);
+    }
+
+    private String getString(Cell c) {
+        if (c == null) return "";
+        return switch (c.getCellType()) {
+            case STRING -> c.getStringCellValue().trim();
+            case NUMERIC -> {
+                double d = c.getNumericCellValue();
+                if (d == Math.floor(d)) yield String.valueOf((long) d);
+                yield String.valueOf(d);
+            }
+            case BOOLEAN -> String.valueOf(c.getBooleanCellValue());
+            default -> "";
+        };
     }
 
     private String str(Object o) {
