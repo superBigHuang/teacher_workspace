@@ -449,16 +449,22 @@ async function doParse() {
   const list = []
   for (const seg of res.segments) {
     for (const module of seg.modules) {
-      const matched = seg.students[0]
-      const entry = {
-        checked: true, module, text: seg.text,
-        studentId: matched ? matched.id : null,
-        studentName: matched ? matched.name : ''
+      // 需要学生的模块：为每名命中学生各生成一条（多人不再静默取第一个，避免误关联到 id 最小的学生）；
+      // 无命中则一条留空待老师手选；无需学生的模块（待办）一条不带学生
+      const targets = needStudent(module)
+        ? (seg.students.length ? seg.students : [null])
+        : [null]
+      for (const matched of targets) {
+        const entry = {
+          checked: true, module, text: seg.text,
+          studentId: matched ? matched.id : null,
+          studentName: matched ? matched.name : ''
+        }
+        if (module === 'ATTENDANCE') entry.status = inferAttStatus(seg.text)
+        if (module === 'COMM') entry.method = seg.text.includes('微信') ? '微信' : (seg.text.includes('面谈') ? '面谈' : '电话')
+        if (module === 'HOMEWORK') entry.subject = inferSubject(seg.text)
+        list.push(entry)
       }
-      if (module === 'ATTENDANCE') entry.status = inferAttStatus(seg.text)
-      if (module === 'COMM') entry.method = seg.text.includes('微信') ? '微信' : (seg.text.includes('面谈') ? '面谈' : '电话')
-      if (module === 'HOMEWORK') entry.subject = inferSubject(seg.text)
-      list.push(entry)
     }
   }
   entries.value = list

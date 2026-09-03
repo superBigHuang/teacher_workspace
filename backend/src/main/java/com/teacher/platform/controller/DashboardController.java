@@ -232,12 +232,26 @@ public class DashboardController extends BaseController {
                     }
                 }
             }
+            // 学生匹配：按姓名长度降序，长名命中后从"剩余文本"中移除再判短名——
+            // 避免短名作为长名字面子串被误命中（如"陈俊"误中"陈俊琪…"句）；短名在句中独立出现时仍能命中
+            List<Map<String, Object>> stuSorted = new ArrayList<>(students);
+            stuSorted.sort((a, b) -> str(b.get("name")).length() - str(a.get("name")).length());
             List<Map<String, Object>> hit = new ArrayList<>();
-            for (Map<String, Object> s : students) {
+            String remain = text;
+            for (Map<String, Object> s : stuSorted) {
                 String name = str(s.get("name"));
                 String stuNo = str(s.get("stu_no"));
-                if ((!name.isEmpty() && text.contains(name)) || (!stuNo.isEmpty() && text.contains(stuNo))) {
+                boolean byName = !name.isEmpty() && remain.contains(name);
+                // 学号匹配：短学号(1、2…40)在自由文本里撞车率太高（日期 2026、数量"1分钟"、"E2E" 都会含数字），
+                // 故只认明确的学号语境——与"号"字相邻："2号迟到"(N号) 或 "学号2迟到"(号N)；
+                // 且用 ASCII 字母数字边界防止"12号"误命中学号 2。
+                String noQ = java.util.regex.Pattern.quote(stuNo);
+                boolean byNo = !stuNo.isEmpty() && (
+                        java.util.regex.Pattern.compile("(?<![A-Za-z0-9])" + noQ + "号").matcher(text).find()
+                        || java.util.regex.Pattern.compile("号" + noQ + "(?![A-Za-z0-9])").matcher(text).find());
+                if (byName || byNo) {
                     hit.add(Map.of("id", s.get("id"), "name", name));
+                    if (byName) remain = remain.replace(name, ""); // 移除已命中长名，防其子串短名误命中
                 }
             }
             if (modules.isEmpty()) modules.add("TODO"); // 无法识别默认待办

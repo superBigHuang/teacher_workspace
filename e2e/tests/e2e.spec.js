@@ -189,6 +189,13 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         headers: authHeader(), data: { v: dispDefault }
       })
     } catch (e) { /* 忽略 */ }
+    try {
+      // 速记匹配测试的临时学生兜底（正常已在 step finally 删除；真实 40 学生名不含 E2E）
+      for (const s of ((await (await request.get(API + '/roster/students', {
+        headers: authHeader(), params: { keyword: 'E2E' } })).json()).data || [])) {
+        await request.delete(API + '/roster/student/' + s.id, { headers: authHeader() })
+      }
+    } catch (e) { /* 忽略 */ }
   })
 
   test('登录 → 8 大模块 → 日常速记 → 删除验证 → 刷新保活', async ({ page, request }) => {
@@ -792,6 +799,43 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await dlg.getByRole('button', { name: '一键保存' }).click()
       await expect(page.locator('.el-message--success').first()).toBeVisible()
       await expect(dlg).toBeHidden()
+    })
+
+    // ============ 10b. 速记学生匹配：长名子串不误命中短名；多人命中拆分各一条 ============
+    await test.step('速记：长名子串不误命中；多人命中每名学生各一条', async () => {
+      // 临时短名学生："E2E测" 是 "E2E测试生" 的子串
+      const shortId = (await (await request.post(API + '/roster/student', {
+        headers: authHeader(), data: { stuNo: '997', name: 'E2E测', gender: '男' },
+      })).json()).data
+      expect(shortId).toBeTruthy()
+      try {
+        const parse = async content => (await (await request.post(API + '/dashboard/quicknote/parse', {
+          headers: authHeader(), data: { content },
+        })).json()).data.segments
+        const namesOf = segs => segs.flatMap(s => s.students).map(x => x.name)
+        // ① 子串去重：只提长名"E2E测试生"时，短名"E2E测"不被误命中
+        const names1 = namesOf(await parse('E2E测试生今天迟到'))
+        expect(names1).toContain('E2E测试生')
+        expect(names1).not.toContain('E2E测')
+        // ② 短名独立出现：两人都提到 → 长名移除后剩余文本仍含短名，两人都命中
+        const names2 = namesOf(await parse('E2E测和E2E测试生今天都迟到'))
+        expect(names2).toContain('E2E测')
+        expect(names2).toContain('E2E测试生')
+        // ③ UI 多人拆分：早读考勤为每名学生各生成一条 entry（不再静默取 students[0]）
+        await page.goto('/dashboard')
+        await page.getByPlaceholder('输入速记内容，回车智能归类...').fill('E2E测和E2E测试生今天都迟到')
+        await page.getByRole('button', { name: '归类' }).click()
+        const pdlg = page.locator('.el-dialog', { hasText: '速记智能归类预览' })
+        await expect(pdlg).toBeVisible()
+        await expect(pdlg.locator('.entry')).toHaveCount(2)
+        // 两条分别预选两名学生（el-select 选中态显示「姓名（学号）」，全角括号）
+        await expect(pdlg.getByText('E2E测（997）')).toBeVisible()
+        await expect(pdlg.getByText('E2E测试生（999）')).toBeVisible()
+        await pdlg.getByRole('button', { name: '取消' }).click()
+        await expect(pdlg).toBeHidden()
+      } finally {
+        await request.delete(API + '/roster/student/' + shortId, { headers: authHeader() })
+      }
     })
 
     // ============ 11. 班级日常 ============
