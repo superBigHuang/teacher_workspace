@@ -10,7 +10,7 @@
     <!-- 值日事项 -->
     <el-card class="block">
       <div class="task-head">
-        <b>📋 值日工作总项（小组自行分配）</b>
+        <b>📋 值日工作总项</b>
         <el-button size="small" type="primary" plain :icon="Plus" @click="addTask">添加</el-button>
       </div>
       <div class="task-tags">
@@ -39,7 +39,6 @@
             </el-tag>
             <el-icon class="x" @click="removeRoster(r.rosterId)"><Close /></el-icon>
           </div>
-          <div class="day-foot">小组自行分配工作</div>
         </div>
       </div>
     </div>
@@ -265,7 +264,6 @@ async function removeCommittee(id) {
 .dp-name { flex-shrink: 0; }
 .dp-task { margin-right: auto; }
 .duty-person .x { color: #e88; cursor: pointer; flex-shrink: 0; }
-.day-foot { text-align: center; color: #b0b3c0; font-size: 12px; padding: 12px; border-top: 1px dashed #ccc; border-style: dashed none none none; }
 .committee-list { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
 .committee-tag { font-size: 15px; padding: 8px 14px; }
 /* 学习小组：按座位列的彩色卡片（配色复用值日卡五色循环） */
