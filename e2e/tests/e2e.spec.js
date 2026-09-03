@@ -25,6 +25,7 @@ let testStudentId2 = null // 临时测试学生2（自创皮肤领养验证用�
 let seatConfigBak = null  // 座次表 v2：admin 真实座次布局备份（rows/cols/aisles），afterAll 恢复
 // 注：显示偏好 seat_display 不做备份/恢复——步骤 14 会逐项翻转，afterAll 始终写回默认 JSON，
 // 避免"中途失败时备份已带 flip=1"导致污染随每次运行自我延续
+let e2ePushWrote = false  // 消息推送：E2E 是否写过测试 webhook（仅 admin 未配置时才写；afterAll 仅此时清理，防误删真实推送配置）
 
 const nav = (page, name) => page.locator('.nav-item', { hasText: name }).first()
 const authHeader = () => ({ Authorization: 'Bearer ' + token })
@@ -125,6 +126,14 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     try {
       // 恢复 AI 启用（11c 步骤临时关闭走模板；admin 为真实使用账号）
       await request.put(API + '/ai/config', { headers: authHeader(), data: { enabled: true } })
+    } catch (e) { /* 忽略 */ }
+    try {
+      // 消息推送清理：仅当 E2E 写过测试 webhook 才清（admin 已配真实渠道时全程跳过，掩码无法备份还原）
+      if (e2ePushWrote) {
+        await request.put(API + '/push/config', { headers: authHeader(), data: {
+          enabled: false, wecomUrl: '__clear__',
+        } })
+      }
     } catch (e) { /* 忽略 */ }
     try {
       if (testStudentId) await request.delete(API + '/roster/student/' + testStudentId, { headers: authHeader() })
@@ -229,14 +238,29 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     })
 
     // ============ 0c. 个人设置页 ============
-    await test.step('个人设置：侧边栏入口进入，五个设置卡（含 AI 助手）可见', async () => {
+    await test.step('个人设置：侧边栏入口进入，六个设置卡（含 AI 助手/消息推送）可见', async () => {
       await page.locator('.action-item', { hasText: '个人设置' }).click()
       await expect(page).toHaveURL(/\/settings/)
-      await expect(page.locator('.candy-card')).toHaveCount(5)
+      await expect(page.locator('.candy-card')).toHaveCount(6)
       await expect(page.locator('.candy-card h3', { hasText: '修改密码' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: '我的班级' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: '我的学科' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: 'AI 助手' })).toBeVisible()
+
+      // 消息推送卡（跨两列）：总开关/三渠道/教程链接/本期事件开关/即将支持
+      const pushCard = page.locator('.candy-card', { hasText: '消息推送' })
+      await expect(pushCard).toBeVisible()
+      await expect(pushCard.locator('.el-switch')).toBeVisible()
+      await expect(pushCard.getByRole('link', { name: /图文教程/ })).toBeVisible()
+      for (const t of ['企业微信群机器人', '钉钉群机器人', 'Bark']) {
+        await expect(pushCard.getByText(t).first()).toBeVisible()
+      }
+      await expect(pushCard.locator('.el-checkbox', { hasText: '待办到期' })).toBeVisible()
+      await expect(pushCard.locator('.el-checkbox', { hasText: '学生成就早报' })).toBeVisible()
+      await expect(pushCard.locator('.el-checkbox.is-disabled', { hasText: '即将支持' }).first()).toBeVisible()
+      // .cards align-items:start（修密码卡大片留白）
+      const cardsAlign = await page.locator('.cards').evaluate(el => getComputedStyle(el).alignItems)
+      expect(cardsAlign).toBe('start')
 
       // 学期起止日期保存 + 学期素材聚合（评语/通知单/档案/请假共用底层）
       const upTerm = await request.put(API + '/settings/profile', {
@@ -291,6 +315,35 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const tBody = await t.json()
       expect(tBody.code).toBe(200)
       expect(tBody.data.ok).toBe(true)
+
+      // ---- 消息推送：配置结构/密钥掩码不明取/未配置渠道测试失败（不发真实 webhook）----
+      const push0 = (await (await request.get(API + '/push/config', { headers: authHeader() })).json()).data
+      for (const ch of ['wecom', 'dingtalk', 'bark']) {
+        expect(push0[ch]).toHaveProperty('configured')
+        expect(push0[ch]).toHaveProperty('hint')
+      }
+      expect(push0.events.todo).toBe(1)
+      expect(push0.events.achievement).toBe(1)
+      expect(push0.events.leave).toBe(0)
+      if (!push0.wecom.configured) {
+        // admin 未配过企微才写测试 webhook（已配真实渠道则跳过——掩码无法备份还原，不能覆盖真实配置）
+        const putPush = await request.put(API + '/push/config', { headers: authHeader(), data: {
+          enabled: true, events: { todo: 1, achievement: 1 },
+          wecomUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=testkey123-e2e',
+        } })
+        expect((await putPush.json()).code).toBe(200)
+        e2ePushWrote = true
+      }
+      const push1Raw = await (await request.get(API + '/push/config', { headers: authHeader() })).text()
+      const push1 = JSON.parse(push1Raw).data
+      expect(push1.wecom.configured).toBe(true)
+      expect(push1.wecom.hint).toContain('••••')
+      // 响应体绝不含 webhook 明文
+      expect(push1Raw).not.toContain('testkey123-e2e')
+      // Bark 未配置 → 测试推送 ok:false（不会真发第三方）
+      const barkT = (await (await request.post(API + '/push/test',
+        { headers: authHeader(), data: { channel: 'bark' } })).json()).data
+      expect(barkT.ok).toBe(false)
 
       // 回到工作台，继续后续模块走查
       await nav(page, '工作台').click()
@@ -517,6 +570,27 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await item.locator('.el-checkbox').click()
       await expect.poll(async () =>
         await item.evaluate(el => el.classList.contains('done')), { timeout: 10000 }).toBeTruthy()
+
+      // 推送状态 chip + 轻量配置弹窗（不跳页；两种文案兼容 admin 是否已开启）
+      const chip = page.locator('.push-chip')
+      await expect(chip).toBeVisible()
+      await expect(chip).toHaveText(/推送已开启|开启到期提醒/)
+      await chip.click()
+      const pushDlg = page.locator('.el-dialog', { hasText: '开启到期提醒推送' })
+      await expect(pushDlg).toBeVisible()
+      await expect(pushDlg.locator('.el-radio')).toHaveCount(3)
+      await expect(pushDlg.getByRole('link', { name: /图文教程/ })).toBeVisible()
+      await expect(pushDlg.getByRole('button', { name: '发送测试' })).toBeVisible()
+      // 切到 Bark：出现设备 Key 输入框
+      await pushDlg.locator('.el-radio', { hasText: 'Bark' }).click()
+      await expect(pushDlg.getByPlaceholder(/设备 Key/)).toBeVisible()
+      await pushDlg.getByRole('button', { name: '取消' }).click()
+      await expect(pushDlg).toBeHidden()
+      // 新增区布局修复：输入框/日期/添加按钮同卡片内可见（flex-wrap，不再错位）
+      const addCard = page.locator('.add-card')
+      await expect(addCard.getByPlaceholder(/新增待办/)).toBeVisible()
+      await expect(addCard.locator('.el-date-editor')).toBeVisible()
+      await expect(addCard.getByRole('button', { name: '添加' })).toBeVisible()
     })
 
     // ============ 9. 准备临时测试学生（写操作都针对它） ============

@@ -437,3 +437,15 @@ CREATE TABLE IF NOT EXISTS setting (
   v VARCHAR(500),
   PRIMARY KEY (user_id, k)
 );
+
+-- 消息推送发送记录（per-user；按 渠道+业务键 幂等去重，如 todo-daily:2026-09-03 / ach:123:GOLD）
+CREATE TABLE IF NOT EXISTS push_log (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  channel VARCHAR(16) NOT NULL COMMENT 'wecom / dingtalk / bark',
+  biz_ref VARCHAR(64) COMMENT '幂等键：todo-daily:日期 / ach-daily:日期 / ach:saId:tier',
+  ok TINYINT DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_push_user (user_id),
+  KEY idx_push_biz (user_id, channel, biz_ref)
+);

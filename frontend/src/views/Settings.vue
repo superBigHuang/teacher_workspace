@@ -157,6 +157,67 @@
           <p class="privacy-tip">🔒 学生姓名与在校表现数据将发送至你配置的 AI 服务商，请使用合规服务；使用系统默认服务则数据发往管理员预置的服务。未配置或调用失败时自动降级为离线模板生成，功能不受影响。</p>
         </el-form>
       </section>
+
+      <!-- 消息推送（跨两列）：企微/钉钉群机器人 webhook + Bark；密钥不明文回显 -->
+      <section class="candy-card wide push-card">
+        <h3 class="push-head">
+          <span class="push-title">🔔 消息推送
+            <el-switch v-model="push.enabled" class="ai-switch" active-text="开启" inactive-text="关闭" />
+          </span>
+          <a href="https://www.kdocs.cn/l/cer5TG9NdxvQ" target="_blank" class="push-guide">📖 不会配置？看图文教程</a>
+        </h3>
+        <el-form label-position="top" class="form">
+          <!-- 企业微信（主推，无需加签） -->
+          <div class="push-ch">
+            <div class="push-ch-title">💬 企业微信群机器人
+              <span v-if="push.wecomCfg" class="push-state">已配置 {{ push.wecomHint }}</span>
+            </div>
+            <div class="push-ch-row">
+              <el-input v-model="push.wecomUrl"
+                :placeholder="push.wecomCfg ? `已配置 ${push.wecomHint}，留空不修改；填新地址则覆盖` : '企业微信群里「添加群机器人」→ 复制 Webhook 地址粘到这里'" />
+              <el-button :loading="pushTesting === 'wecom'" @click="testPush('wecom')">发送测试</el-button>
+            </div>
+          </div>
+          <!-- 钉钉（加签选填；关键词安全设置时消息已固定含"班主任"） -->
+          <div class="push-ch">
+            <div class="push-ch-title">📌 钉钉群机器人
+              <span v-if="push.dingCfg" class="push-state">已配置 {{ push.dingHint }}<template v-if="push.dingSecret"> · 已加签</template></span>
+            </div>
+            <div class="push-ch-row">
+              <el-input v-model="push.dingtalkUrl"
+                placeholder="钉钉群：群设置 → 智能群助手 → 添加机器人 → 复制 Webhook 地址" />
+              <el-button :loading="pushTesting === 'dingtalk'" @click="testPush('dingtalk')">发送测试</el-button>
+            </div>
+            <el-input v-model="push.dingtalkSecret" class="push-secret"
+              :placeholder="push.dingSecret ? '已设置加签 Secret，留空不修改' : '加签 Secret（选填；机器人安全设置选了「加签」才填，选「关键词」不用填）'" />
+          </div>
+          <!-- Bark（iOS 个人推送） -->
+          <div class="push-ch">
+            <div class="push-ch-title">📱 Bark（iPhone 个人推送，只推给你自己）
+              <span v-if="push.barkCfg" class="push-state">已配置 {{ push.barkHint }}</span>
+            </div>
+            <div class="push-ch-row">
+              <el-input v-model="push.barkKey" placeholder="App Store 安装 Bark，打开 App 复制自己的设备 Key" />
+              <el-button :loading="pushTesting === 'bark'" @click="testPush('bark')">发送测试</el-button>
+            </div>
+            <el-input v-model="push.barkServer" class="push-secret"
+              placeholder="自建服务器地址（选填，留空用官方 api.day.app）" />
+          </div>
+
+          <el-form-item label="推送哪些消息（每天早 8:00 汇总推送到手机）">
+            <el-checkbox-group v-model="push.eventOn" class="push-events">
+              <el-checkbox value="todo">✅ 待办到期 / 逾期提醒</el-checkbox>
+              <el-checkbox value="achievement">✅ 学生成就早报</el-checkbox>
+              <el-checkbox value="leave" disabled>⏳ 病假预警（即将支持）</el-checkbox>
+              <el-checkbox value="score" disabled>⏳ 成绩导入（即将支持）</el-checkbox>
+              <el-checkbox value="pet" disabled>⏳ 宠物动态（即将支持）</el-checkbox>
+              <el-checkbox value="daily" disabled>⏳ 每日早报（即将支持）</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-button type="primary" class="save-btn push-save" :loading="push.saving" @click="savePush">保存推送设置 💾</el-button>
+          <p class="privacy-tip">🔒 Webhook/Key 仅保存在本系统后台、不明文回显；配了几个渠道就都会发，推送失败自动跳过不影响使用。</p>
+        </el-form>
+      </section>
     </div>
   </div>
 </template>
@@ -213,6 +274,7 @@ async function load() {
   classes.value = await http.get('/timetable/classes')
   subjects.value = await http.get('/timetable/subjects')
   loadAi()
+  loadPush()
 }
 
 /** 加载 AI 配置（apiKey 不回显，仅掩码与状态） */
@@ -258,6 +320,70 @@ async function testAi() {
     ai.testResult = await http.post('/ai/test', {})
   } finally {
     ai.testing = false
+  }
+}
+
+// 消息推送配置（webhook/key 不明文回显，仅靠掩码占位提示已配置；空串=不修改）
+const push = reactive({
+  enabled: false,
+  wecomUrl: '', dingtalkUrl: '', dingtalkSecret: '', barkKey: '', barkServer: '',
+  eventOn: ['todo', 'achievement'],   // checkbox-group 绑定勾选的事件键
+  wecomCfg: false, wecomHint: '',
+  dingCfg: false, dingSecret: false, dingHint: '',
+  barkCfg: false, barkHint: '',
+  saving: false,
+})
+const pushTesting = ref('')
+const PUSH_EVENT_KEYS = ['todo', 'achievement', 'leave', 'score', 'pet', 'daily']
+
+/** 加载推送配置（密钥不回显，只取掩码与已配置标记） */
+async function loadPush() {
+  try {
+    const c = await http.get('/push/config')
+    push.enabled = !!c.enabled
+    push.wecomCfg = !!c.wecom?.configured;  push.wecomHint = c.wecom?.hint || ''
+    push.dingCfg = !!c.dingtalk?.configured; push.dingSecret = !!c.dingtalk?.hasSecret
+    push.dingHint = c.dingtalk?.hint || ''
+    push.barkCfg = !!c.bark?.configured;    push.barkHint = c.bark?.hint || ''
+    push.barkServer = c.bark?.server || ''
+    push.eventOn = PUSH_EVENT_KEYS.filter(k => c.events?.[k] === 1)
+    // 密钥输入框回填后清空，留空=不修改
+    push.wecomUrl = push.dingtalkUrl = push.dingtalkSecret = push.barkKey = ''
+  } catch (e) { /* 接口异常按未配置处理，不阻塞设置页 */ }
+}
+
+/** 保存推送设置；silent=true 时为测试前静默保存 */
+async function savePush(silent) {
+  push.saving = true
+  try {
+    const events = {}
+    for (const k of PUSH_EVENT_KEYS) events[k] = push.eventOn.includes(k) ? 1 : 0
+    await http.put('/push/config', {
+      enabled: push.enabled,
+      events,
+      wecomUrl: push.wecomUrl || '',
+      dingtalkUrl: push.dingtalkUrl || '',
+      dingtalkSecret: push.dingtalkSecret || '',
+      barkKey: push.barkKey || '',
+      barkServer: push.barkServer || '',
+    })
+    if (!silent) ElMessage.success('推送设置已保存 🔔')
+    await loadPush()
+  } finally {
+    push.saving = false
+  }
+}
+
+/** 发送测试：先静默保存界面上刚填的地址，再 POST /test，结果直接弹消息 */
+async function testPush(channel) {
+  pushTesting.value = channel
+  try {
+    await savePush(true)
+    const r = await http.post('/push/test', { channel })
+    if (r.ok) ElMessage.success('测试消息已发送，查看手机 📲')
+    else ElMessage.error(r.message || '发送失败，请检查地址/密钥')
+  } finally {
+    pushTesting.value = ''
   }
 }
 
@@ -337,7 +463,7 @@ onMounted(load)
 .page-head h2 { margin: 0 0 4px; color: #6b5b73; }
 .page-head .tip { color: #b7a6b8; margin: 0 0 18px; font-size: 13px; }
 
-.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
 .candy-card {
   background: #fff; border-radius: 22px; padding: 22px 24px;
   box-shadow: 0 10px 28px rgba(200,180,200,.18);
@@ -395,6 +521,22 @@ onMounted(load)
 .purple-btn { background: linear-gradient(135deg, #b89ff0, #f0a8d8); }
 .ai-test-result { margin-bottom: 12px; }
 .privacy-tip { color: #b7a6b8; font-size: 12px; line-height: 1.6; margin: 4px 0 0; }
+
+/* 消息推送卡（跨两列） */
+.candy-card.wide { grid-column: 1 / -1; }
+.push-card::before { background: #ffe0c9; }
+.push-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.push-title { display: flex; align-items: center; gap: 8px; }
+.push-guide { font-size: 13px; color: #e08a5e; font-weight: 700; text-decoration: none; }
+.push-guide:hover { text-decoration: underline; }
+.push-ch { background: #faf7ff; border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; }
+.push-ch-title { font-weight: 800; color: #6b5b73; font-size: 14px; margin-bottom: 8px; }
+.push-state { color: #b7a6b8; font-weight: 600; font-size: 12px; margin-left: 6px; }
+.push-ch-row { display: flex; gap: 10px; }
+.push-ch-row .el-input { flex: 1; }
+.push-secret { margin-top: 8px; }
+.push-events { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.push-save { width: auto; min-width: 220px; }
 
 @media (max-width: 860px) { .cards { grid-template-columns: 1fr; } }
 </style>
