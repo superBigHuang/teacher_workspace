@@ -1312,6 +1312,11 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     // ============ 14. 座次表 v2：设置收纳 · 简易模式 · 名字位置 · 打印 ============
     await test.step('座次表v2：工具栏瘦身/设置弹窗改布局与过道/简易模式/名字位置/打印倒转黑白/偏好持久化', async () => {
       await page.goto('/seat')
+      // 组长记录先清场（保证幂等：库里可能有手动测试残留的组长，会干扰"点第一个=设组长"断言；afterAll 还会再清）
+      const cmPre = (await (await request.get(API + '/duty/committee', { headers: authHeader() })).json()).data || []
+      for (const c of cmPre) {
+        if (c.role === '组长') await request.delete(API + '/duty/committee/' + c.id, { headers: authHeader() })
+      }
       // 14.1 工具栏瘦身：⚙设置/🖨打印 可见，旧的行数/列数/过道控件已移除
       await expect(page.getByRole('button', { name: '座位设置' })).toBeVisible({ timeout: 10000 })
       await expect(page.getByRole('button', { name: '打印' })).toBeVisible()
@@ -1398,9 +1403,11 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const leaderGrid = (await (await request.get(API + '/seat/grid', { headers: authHeader() })).json()).data
       const byCol = {}
       for (const s of leaderGrid.seats) if (s.studentId) (byCol[s.col] ||= []).push(s.studentId)
-      const colPair = Object.values(byCol).find(ids => ids.length >= 2)
-      expect(colPair, '座位表应存在至少 2 人的列').toBeTruthy()
+      const leaderColNo = Number(Object.keys(byCol).find(col => byCol[col].length >= 2))
+      expect(leaderColNo, '座位表应存在至少 2 人的列').toBeTruthy()
+      const colPair = byCol[leaderColNo]
       const [sidA, sidB] = colPair
+      const leaderNameA = leaderGrid.seats.find(s => s.studentId === sidA)?.name
       const crownOf = sid => page.locator(`.seat[data-sid="${sid}"] .seat-leader`)
       // 工具栏按钮（限定 .page-toolbar，避开指派提示条内同名的"完成指派"按钮）
       const leaderBtn = page.locator('.page-toolbar').getByRole('button', { name: /组长|完成指派/ })
@@ -1489,6 +1496,22 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.evaluate(() => document.body.classList.remove('seat-printing'))
       await expect(page.locator('.seat-print-area')).toBeHidden() // 屏幕态恢复隐藏
       await pDlg.locator('.el-dialog__close').last().click()
+
+      // 14.8 值日·班委页：组长不进班委名单标签，单独「学习小组」区按座位列显示组长+组员
+      await page.goto('/duty')
+      const committeeCard = page.locator('.el-card', { hasText: '班委名单' }).last()
+      await expect.poll(async () =>
+        (await committeeCard.locator('.committee-tag').allTextContents()).filter(t => t.includes('组长')).length,
+        { timeout: 10000 }).toBe(0)
+      const groupCard = page.locator('.el-card', { hasText: '学习小组' })
+      await expect(groupCard).toBeVisible()
+      // 小组卡总数 = 有学生的列数
+      const seatedCols = new Set(leaderGrid.seats.filter(s => s.studentId).map(s => s.col)).size
+      await expect.poll(async () => await groupCard.locator('.group-card').count(), { timeout: 10000 }).toBe(seatedCols)
+      // 组长所在列卡：标题「第 N 列」、组长行 👑姓名、组长外有组员行
+      const targetCol = groupCard.locator('.group-card', { hasText: `第 ${leaderColNo} 列` })
+      await expect(targetCol.locator('.group-leader')).toContainText(leaderNameA)
+      await expect(targetCol.locator('.group-member').first()).toBeVisible()
     })
   })
 })
