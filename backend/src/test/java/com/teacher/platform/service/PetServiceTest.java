@@ -2,38 +2,22 @@ package com.teacher.platform.service;
 
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 宠物园纯逻辑单测（不启动 Spring、不连数据库）：
- * 破壳跨天判断 {@link PetService#isHatchDue} 与破壳等级结算 {@link PetService#levelOf}。
+ * 孵化经验阈值 {@link PetService#HATCH_EXP} 与破壳/升级等级结算 {@link PetService#levelOf}。
  */
 class PetServiceTest {
 
     @Test
-    void isHatchDue_今天领养_未到期() {
-        LocalDate today = LocalDate.of(2026, 9, 2);
-        // 今天任意时刻领养（凌晨 0 点到深夜 23:59）都不算到期，需跨自然日
-        assertFalse(PetService.isHatchDue(today.atStartOfDay(), today));
-        assertFalse(PetService.isHatchDue(today.atTime(23, 59, 59), today));
-    }
-
-    @Test
-    void isHatchDue_昨天及更早领养_已到期() {
-        LocalDate today = LocalDate.of(2026, 9, 2);
-        // 昨天深夜领养，今天首次打开即到期（只看日期，不看具体时分）
-        assertTrue(PetService.isHatchDue(today.minusDays(1).atTime(23, 59), today));
-        assertTrue(PetService.isHatchDue(today.minusDays(3).atTime(8, 0), today));
-    }
-
-    @Test
-    void isHatchDue_未来时间或空值_不到期() {
-        LocalDate today = LocalDate.of(2026, 9, 2);
-        assertFalse(PetService.isHatchDue(today.plusDays(1).atStartOfDay(), today));
-        assertFalse(PetService.isHatchDue(null, today));
+    void hatchExp_攒够20才破壳且破壳即Lv1() {
+        // 孵化阈值 20：低于 Lv2 的 40，保证破壳时按累计经验结算为 Lv1（先破壳再继续成长升级）
+        assertEquals(20, PetService.HATCH_EXP);
+        assertTrue(PetService.HATCH_EXP < 40);
+        // 破壳那一刻按累计 exp 结算等级：19、20 分都还是 Lv1
+        assertEquals(1, PetService.levelOf(PetService.HATCH_EXP - 1));
+        assertEquals(1, PetService.levelOf(PetService.HATCH_EXP));
     }
 
     @Test

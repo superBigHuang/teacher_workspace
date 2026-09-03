@@ -8,9 +8,10 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 /**
- * 班级宠物园核心逻辑：领养、成长值加减（升级/扣分保护）、毕业、撤回、自动联动幂等、负面状态。
+ * 班级宠物园核心逻辑：领养、成长值加减（升级/扣分保护）、孵化破壳、毕业、撤回、自动联动幂等、负面状态。
  * 升级曲线（累计 exp）：Lv2=40、Lv3=100、Lv4=180、Lv5=280；
- * 扣分 exp 下限 0 且不降级；biz_ref 幂等防止自动联动重复扣分；未领养学生不产生积分。
+ * 孵化：领养后是一颗蛋（hatched=0），蛋期间成长值照常累计，攒够 {@link #HATCH_EXP}（20）即破壳成为 Lv1 宠物；
+ * 扣分 exp 下限 0 且不降级（蛋期间扣分同样会拖慢孵化）；biz_ref 幂等防止自动联动重复扣分；未领养学生不产生积分。
  */
 @Service
 public class PetService {
@@ -23,6 +24,9 @@ public class PetService {
 
     /** 满级累计成长值 */
     public static final int MAX_EXP = 280;
+
+    /** 破壳所需累计成长值：蛋攒够 20 分即孵化（低于 Lv2 的 40，先破壳成为 Lv1，再继续成长升级） */
+    public static final int HATCH_EXP = 20;
 
     /** 一次成长值变动的结果：affected=实际变动的宠物数；levelUp=本次触发的升级事件（无则 null） */
     public record AwardResult(int affected, LevelUp levelUp) {}
@@ -64,23 +68,19 @@ public class PetService {
                     Integer.class, key, uid);
             if (ok == null || ok == 0) key = "dragon";
         }
-        // v1.2：领养后先是一颗孵化中的蛋（hatched=0），次日破壳；level 初始 1，破壳时按累计 exp 结算
+        // 领养后先是一颗孵化中的蛋（hatched=0，exp=0）；蛋期间成长值照常累计，攒够 HATCH_EXP(20) 破壳，
+        // 破壳时按累计 exp 结算等级（20 分对应 Lv1）。adopted_at 仅作领养时间记录，不再参与破壳判定。
         jdbc.update("INSERT INTO pet(user_id,student_id,pet_key,pet_name,level,exp,hatched,adopted_at) VALUES(?,?,?, ?,1,0,0,?)",
                 uid, studentId, key,
                 petName == null || petName.isBlank() ? "云小龙" : petName, LocalDateTime.now());
         return true;
     }
 
-    /** 是否到破壳时间：领养日期早于今天（跨自然日）。今天领养=false，昨天及更早=true */
-    public static boolean isHatchDue(LocalDateTime adoptedAt, LocalDate today) {
-        return adoptedAt != null && adoptedAt.toLocalDate().isBefore(today);
-    }
-
     /**
-     * 破壳：孵化中的蛋到期（跨自然日）则置 hatched=1，并按蛋期间累计 exp 一次性结算等级。
-     * 跨天校验交给 SQL WHERE（DATE(adopted_at)&lt;CURDATE()），与待播查询同一条件，避免时区/类型歧义。
+     * 破壳：孵化中的蛋累计成长值达到 {@link #HATCH_EXP}（20）则置 hatched=1，并按累计 exp 一次性结算等级。
+     * 经验校验交给 SQL WHERE（exp&gt;=HATCH_EXP），与待播查询同一条件，避免歧义。
      *
-     * @param forceDev true=跳过跨天校验（仅开发/E2E 开关 app.pet.dev-hatch，生产恒为 false）
+     * @param forceDev true=跳过经验校验（仅开发/E2E 开关 app.pet.dev-hatch，生产恒为 false）
      * @return true=本次发生破壳
      */
     public boolean hatch(Long uid, Long studentId, boolean forceDev) {
@@ -91,10 +91,12 @@ public class PetService {
         if (((Number) p.get("hatched")).intValue() != 0) return false;   // 已破壳，幂等
         int level = levelOf(((Number) p.get("exp")).intValue());
         Long petId = ((Number) p.get("id")).longValue();
-        String sql = forceDev
-                ? "UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0"
-                : "UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0 AND DATE(adopted_at)<CURDATE()";
-        return jdbc.update(sql, level, petId) > 0;
+        // 注意：force 分支 SQL 无 exp 占位符，两条语句参数个数不同，必须分别传参（多传会导致驱动参数越界）
+        int rows = forceDev
+                ? jdbc.update("UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0", level, petId)
+                : jdbc.update("UPDATE pet SET hatched=1, level=? WHERE id=? AND hatched=0 AND exp>=?",
+                        level, petId, HATCH_EXP);
+        return rows > 0;
     }
 
     /**
@@ -256,7 +258,7 @@ public class PetService {
         if (((Number) pet.get("level")).intValue() < 5) return false;
         jdbc.update("INSERT INTO pet_badge(user_id,student_id,pet_key,pet_name) VALUES(?,?,?,?)",
                 uid, studentId, pet.get("pet_key"), pet.get("pet_name"));
-        // 毕业有独立仪式弹窗，不走进化演出：清待演标记；轮回从一颗新蛋开始（hatched=0，再孵一天）
+        // 毕业有独立仪式弹窗，不走进化演出：清待演标记；轮回从一颗新蛋开始（hatched=0、exp 归零，重新攒经验孵化）
         jdbc.update("UPDATE pet SET level=1, exp=0, hatched=0, graduated_count=graduated_count+1, evolve_pending=0 WHERE id=?",
                 ((Number) pet.get("id")).longValue());
         return true;

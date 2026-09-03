@@ -201,6 +201,13 @@ export function usePets(opts = {}) {
     return Math.max(4, Math.min(100, Math.round(((p.exp - p.expStart) / span) * 100)))
   }
 
+  /** 破壳所需累计成长值（与后端 PetService.HATCH_EXP 保持一致） */
+  const HATCH_EXP = 20
+  /** 蛋孵化进度百分比：累计成长值 / HATCH_EXP（蛋期间加分照常累计，攒够即破壳） */
+  function hatchPct(p) {
+    return Math.max(0, Math.min(100, Math.round(((p.exp || 0) / HATCH_EXP) * 100)))
+  }
+
   function floatsOf(sid) {
     return floats.value.filter(f => f.sid === sid)
   }
@@ -247,7 +254,7 @@ export function usePets(opts = {}) {
   // ---------- 数据加载 ----------
   /**
    * 加载全班宠物；返回体为 {pets, pendingEvolves, pendingHatches}：
-   * - pendingHatches：到期待破壳的蛋（跨自然日），逐个入队 hatch 幕；若蛋期间攒够分（toLevel>1），
+   * - pendingHatches：攒够成长值（exp>=HATCH_EXP）待破壳的蛋，逐个入队 hatch 幕；若蛋期间攒够分（toLevel>1），
    *   紧随一幕 evolve（破壳即连升，双喜临门）；破壳幕优先于进化幕播放，演完调 hatch-seen。
    * - pendingEvolves：跨页面/自动联动/手机遥控导致的待演升级——遥控在线时攒入 heldEvolves 待播列表
    *   （等手机"播放"指令），否则入队补播（演完调 evolve-seen）。
@@ -291,16 +298,19 @@ export function usePets(opts = {}) {
   function onCardClick(p) {
     if (batchMode.value) { togglePick(p.studentId); return }
     if (!p.petId) { openAdopt(p); return }
-    // 孵化中的蛋：摇晃 + 提示明天再来，不弹领养/详情窗（保持期待感）
+    // 孵化中的蛋：摇晃 + 提示攒能量进度，不弹领养/详情窗（保持期待感）
     if (p.hatched === 0) { wiggleEgg(p); return }
     openDetail(p)
   }
 
-  /** 孵化中蛋点击反馈：左右摇晃 0.5s + ElMessage 提示；加分飘字等照常，不受影响 */
+  /** 孵化中蛋点击反馈：左右摇晃 0.5s + ElMessage 提示还差多少成长值破壳；加分飘字等照常，不受影响 */
   function wiggleEgg(p) {
     eggWiggle.value.set(p.studentId, true)
     setTimeout(() => eggWiggle.value.delete(p.studentId), 500)
-    ElMessage.info(`🥚 ${p.petName || '小精灵'} 还在蛋里睡觉，明天再来看看吧！`)
+    const left = Math.max(0, HATCH_EXP - (p.exp || 0))
+    ElMessage.info(left > 0
+      ? `🥚 ${p.petName || '小精灵'} 还在蛋里攒能量，再得 ${left} 成长值就破壳啦！`
+      : `🥚 ${p.petName || '小精灵'} 能量已满，回到座位上就会破壳啦！`)
   }
   function togglePick(sid) {
     const s = new Set(selected.value)
@@ -345,7 +355,7 @@ export function usePets(opts = {}) {
       petKey: adoptSkin.value,
       petName: adoptName.value
     })
-    ElMessage.success(`领养成功！明天 ${adoptName.value.trim() || '小精灵'} 就会破壳啦~ 🥚`)
+    ElMessage.success(`领养成功！给 ${adoptName.value.trim() || '小精灵'} 攒够 ${HATCH_EXP} 成长值就会破壳啦~ 🥚`)
     adoptDlg.value = false
     await loadPets()
   }
@@ -500,7 +510,7 @@ export function usePets(opts = {}) {
     // 进化演出（模块级单例）
     currentEvolve, enqueueEvolves, onEvolveDone, heldEvolves, playHeld,
     // 工具
-    petImg, skinImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
+    petImg, skinImg, expPct, hatchPct, HATCH_EXP, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
     // 交互
     onCardClick, togglePick, toggleBatch,
     openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, openDetail, revokeLog,

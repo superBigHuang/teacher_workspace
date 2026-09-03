@@ -174,9 +174,10 @@
               <span v-if="p.hatched === 0" class="lv-badge egg-badge">🥚 孵化中</span>
               <span v-else-if="disp.fields.lv" class="lv-badge">Lv.{{ p.level }}</span>
             </div>
-            <!-- 蛋态：隐藏等级与进度条，只留孵化提示（成长值照常累计，破壳时结算） -->
+            <!-- 蛋态：孵化进度条 + 成长值（攒够 HATCH_EXP 即破壳；成长值照常累计，破壳时结算等级） -->
             <template v-if="p.hatched === 0">
-              <div class="exp-text egg-tip">明天破壳，成长值照常累计～</div>
+              <div class="exp-bar"><div class="exp-fill egg-fill" :style="{ width: hatchPct(p) + '%' }"></div></div>
+              <div class="exp-text egg-tip">🥚 {{ Math.min(p.exp || 0, HATCH_EXP) }} / {{ HATCH_EXP }} 攒够破壳</div>
             </template>
             <template v-else>
               <div class="exp-bar"><div class="exp-fill" :style="{ width: expPct(p) + '%' }"></div></div>
@@ -214,7 +215,7 @@
         </div>
       </div>
       <div class="adopt-body">
-        <p class="adopt-tip">一颗温热的精灵蛋正在微微发光……<br>🥚 领养后是一颗神秘蛋，<b>明天</b>就会破壳出生哦！<br>给Ta起个名字，一起成长吧！</p>
+        <p class="adopt-tip">一颗温热的精灵蛋正在微微发光……<br>🥚 领养后是一颗神秘蛋，给Ta攒够 <b>20</b> 成长值（表扬/加分）就会破壳出生哦！<br>给Ta起个名字，一起成长吧！</p>
         <el-input v-model="adoptName" maxlength="12" placeholder="给宠物起个中文名，如：云小龙" />
       </div>
       <template #footer>
@@ -235,9 +236,9 @@
               <span v-if="detailStudent.hatched === 0" class="lv-badge big egg-badge">🥚 孵化中</span>
               <span v-else class="lv-badge big">Lv.{{ detailStudent.level }}</span>
             </div>
-            <!-- 蛋态：孵化提示代替等级/徽章/成长值（破壳后按累计成长值一次性结算） -->
+            <!-- 蛋态：孵化进度提示代替等级/徽章（破壳后按累计成长值一次性结算） -->
             <div v-if="detailStudent.hatched === 0" class="detail-line egg-tip">
-              🥚 蛋蛋正在吸收能量，<b>明天</b>就会破壳出生！<br>这期间加分照常累计哦～
+              🥚 蛋蛋正在吸收能量，攒够 <b>{{ HATCH_EXP }}</b> 成长值就破壳出生！<br>当前 {{ Math.min(detailStudent.exp || 0, HATCH_EXP) }} / {{ HATCH_EXP }}，表扬加分照常累计哦～
             </div>
             <template v-else>
               <div class="detail-line">🎓 毕业徽章：<b>{{ detailStudent.graduatedCount || 0 }}</b> 枚
@@ -251,9 +252,9 @@
           </div>
         </div>
 
-        <!-- 成长进度条（蛋态隐藏；座位格上不显示等级/进度，统一收进详情） -->
-        <div v-if="detailStudent.hatched !== 0" class="detail-exp">
-          <div class="detail-exp-fill" :style="{ width: expPct(detailStudent) + '%' }"></div>
+        <!-- 进度条：蛋态显示孵化进度（exp/HATCH_EXP），破壳后显示本级成长进度（座位格上不展示，统一收进详情） -->
+        <div class="detail-exp">
+          <div class="detail-exp-fill" :style="{ width: (detailStudent.hatched === 0 ? hatchPct(detailStudent) : expPct(detailStudent)) + '%' }"></div>
         </div>
 
         <div class="log-title">📖 最近成长流水</div>
@@ -737,7 +738,7 @@ const {
   adoptName, adoptSkin, detailStudent, detailLogs, evalBatch, evalCat,
   gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
   currentEvolve, onEvolveDone,
-  petImg, skinImg, expPct, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
+  petImg, skinImg, expPct, hatchPct, HATCH_EXP, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
   onCardClick, togglePick, toggleBatch,
   openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, revokeLog,
   openEvalSingle, openEvalBatch, applyRule, doGraduate,

@@ -90,14 +90,14 @@ public class PetController extends BaseController {
                         "FROM pet p JOIN student s ON s.id=p.student_id AND s.user_id=p.user_id " +
                         "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
                         "WHERE p.user_id=? AND p.evolve_pending=1 AND s.class_id=?", uid, classId());
-        // 到期待破壳的蛋（hatched=0 且已跨自然日）；toLevel=按蛋期间累计 exp 结算的等级（攒够分破壳即连升）
+        // 攒够成长值待破壳的蛋（hatched=0 且 exp>=HATCH_EXP）；toLevel=按累计 exp 结算的等级（20 分对应 Lv1）
         List<Map<String, Object>> hatchRows = jdbc.queryForList(
                 "SELECT p.student_id studentId, s.name, p.pet_name petName, p.exp, " +
                         "p.pet_key skinKey, COALESCE(sk.fx_theme,'gold') fxTheme " +
                         "FROM pet p JOIN student s ON s.id=p.student_id AND s.user_id=p.user_id " +
                         "LEFT JOIN pet_skin sk ON sk.skin_key=p.pet_key " +
-                        "WHERE p.user_id=? AND p.hatched=0 AND DATE(p.adopted_at)<CURDATE() AND s.class_id=?",
-                uid, classId());
+                        "WHERE p.user_id=? AND p.hatched=0 AND p.exp>=? AND s.class_id=?",
+                uid, PetService.HATCH_EXP, classId());
         List<Map<String, Object>> pendingHatches = new ArrayList<>();
         for (Map<String, Object> h : hatchRows) {
             Map<String, Object> m = new LinkedHashMap<>(h);
@@ -117,8 +117,8 @@ public class PetController extends BaseController {
     }
 
     /**
-     * 破壳演出播完后回调：蛋到期（跨自然日，SQL WHERE 守卫）才置 hatched=1 并按累计 exp 结算等级。
-     * force 仅在开发/E2E 开关 app.pet.dev-hatch=true 时生效（免跨天等待），生产环境忽略。
+     * 破壳演出播完后回调：蛋累计成长值达到 HATCH_EXP（SQL WHERE 守卫 exp&gt;=20）才置 hatched=1 并按累计 exp 结算等级。
+     * force 仅在开发/E2E 开关 app.pet.dev-hatch=true 时生效（免攒经验等待），生产环境忽略。
      */
     @PostMapping("/hatch-seen")
     public Result<Map<String, Object>> hatchSeen(@RequestBody Map<String, Object> body) {

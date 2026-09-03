@@ -1278,8 +1278,8 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         return list.find(p => p.studentId === testStudentId)
       }
 
-      // ① 领养：当天为「孵化中蛋」——蛋图/暖光/✨、点击只提示不弹窗、hatched=0、
-      //    未跨天 hatch-seen 守卫生效、蛋中加分只累计不进化；force 破壳（dev 开关模拟次日）后显 Lv1
+      // ① 领养：为「孵化中蛋」——蛋图/暖光/✨、点击只提示攒能量不弹窗、hatched=0、
+      //    成长值不足 20 时 hatch-seen 经验守卫生效、蛋中加分只累计不进化；攒够 20 后自然破壳显 Lv1
       let r = await apiPost('/pet/adopt', { studentId: testStudentId, petKey: 'dragon', petName: 'E2E小龙' })
       expect(r.code).toBe(200)
       let me = await petOf()
@@ -1300,12 +1300,12 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       // 蛋态 UI：蛋图（dragon_egg）+ 暖光浮动 class + 右上角 ✨
       await expect(myCard.locator('img.egg[src*="dragon_egg.webp"]')).toBeVisible()
       await expect(myCard.locator('.egg-spark')).toBeVisible()
-      // 点击蛋：ElMessage 提示「明天再来」，不弹详情/领养窗（无可见弹窗遮罩；关闭的弹窗 DOM 仍常驻）
+      // 点击蛋：ElMessage 提示还差多少成长值破壳，不弹详情/领养窗（无可见弹窗遮罩；关闭的弹窗 DOM 仍常驻）
       await myCard.click()
-      await expect(page.locator('.el-message', { hasText: '明天再来看看' })).toBeVisible({ timeout: 5000 })
+      await expect(page.locator('.el-message', { hasText: '成长值就破壳' })).toBeVisible({ timeout: 5000 })
       await expect(page.locator('.el-overlay:visible')).toHaveCount(0)
 
-      // 当天未跨自然日：hatch-seen 不带 force → 后端跨天守卫 changed=false，hatched 仍 0
+      // 经验不足（exp=0 < 20）：hatch-seen 不带 force → 经验守卫 changed=false，hatched 仍 0
       r = await apiPost('/pet/hatch-seen', { studentId: testStudentId })
       expect(r.data.changed).toBe(false)
       me = await petOf()
@@ -1320,8 +1320,22 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(me.level).toBe(1)
       expect(me.hatched).toBe(0)
 
-      // dev 开关 force 破壳（模拟次日首次打开座次表）：changed=true、hatched=1、按累计 exp 结算（5 分仍 Lv1）
-      r = await apiPost('/pet/hatch-seen', { studentId: testStudentId, force: true })
+      // 5 < 20 仍不够孵化：hatch-seen 不带 force 还是 changed=false
+      r = await apiPost('/pet/hatch-seen', { studentId: testStudentId })
+      expect(r.data.changed).toBe(false)
+
+      // 蛋中再加 +5×3 → exp=20（攒够孵化阈值）；蛋中仍不进化、hatched 仍 0
+      for (let i = 0; i < 3; i++) {
+        r = await apiPost('/pet/evaluate', { studentId: testStudentId, ruleId: rule5.id })
+        expect(r.data.affected).toBe(1)
+        expect((r.data.levelUps || []).length).toBe(0)
+      }
+      me = await petOf()
+      expect(me.exp).toBe(20)
+      expect(me.hatched).toBe(0)
+
+      // 攒够 20 成长值：hatch-seen 不带 force → 经验守卫生效 changed=true、hatched=1、按累计 exp 结算（20 分仍 Lv1）
+      r = await apiPost('/pet/hatch-seen', { studentId: testStudentId })
       expect(r.data.changed).toBe(true)
       me = await petOf()
       expect(me.hatched).toBe(1)
@@ -1329,8 +1343,8 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await page.reload()
       await expect(myCard.locator('img[src*="dragon_1.webp"]')).toBeVisible()
 
-      // ② 加分至 exp≥40 → 自动升 Lv2（蛋中已 +5，再 +5 共 7 次合计 40），UI 形态变 dragon_2
-      for (let i = 0; i < 7; i++) {
+      // ② 破壳后加分至 exp≥40 → 自动升 Lv2（破壳时 exp=20，再 +5×4 合计 40），UI 形态变 dragon_2
+      for (let i = 0; i < 4; i++) {
         r = await apiPost('/pet/evaluate', { studentId: testStudentId, ruleId: rule5.id })
         expect(r.data.affected).toBe(1)
       }
@@ -1447,7 +1461,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(rule5).toBeTruthy()
       expect(ruleMinus).toBeTruthy()
 
-      // 11f 末尾毕业典礼后宠物轮回为新蛋（hatched=0）：force 破壳模拟次日，否则点击蛋只提示不弹窗
+      // 11f 末尾毕业典礼后宠物轮回为新蛋（hatched=0、exp=0）：dev force 跳过经验校验直接破壳，否则点击蛋只提示不弹窗
       const hatchR = await apiPost('/pet/hatch-seen', { studentId: testStudentId, force: true })
       expect(hatchR.data.changed).toBe(true)
 
@@ -1610,7 +1624,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await request.post(API + '/pet/adopt', {
         headers: authHeader(), data: { studentId: sid3, petKey: 'dragon', petName: 'E2E遥控龙' }
       })
-      // 领养后为孵化中蛋：force 破壳（dev 开关），否则蛋中加分不进化、不产生 pendingEvolves
+      // 领养后为孵化中蛋：dev force 跳过经验校验直接破壳，否则蛋中加分不进化、不产生 pendingEvolves
       await request.post(API + '/pet/hatch-seen', {
         headers: authHeader(), data: { studentId: sid3, force: true }
       })

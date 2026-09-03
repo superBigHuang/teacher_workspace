@@ -25,8 +25,8 @@
         <button v-for="pet in adoptedPets" :key="pet.studentId" class="m-pet" @click="openSheet(pet)">
           <img :src="p.petImg(pet)" class="m-pet-img" :class="{ frozen: pet.frozen }" alt="" />
           <div class="m-pet-name">{{ pet.name }}</div>
-          <div class="m-pet-lv">Lv.{{ pet.level }} · {{ pet.petName }}</div>
-          <div class="m-exp-bar"><div class="m-exp-fill" :style="{ width: p.expPct(pet) + '%' }"></div></div>
+          <div class="m-pet-lv">{{ pet.hatched === 0 ? '🥚 孵化中' : `Lv.${pet.level} · ${pet.petName}` }}</div>
+          <div class="m-exp-bar"><div class="m-exp-fill" :style="{ width: (pet.hatched === 0 ? p.hatchPct(pet) : p.expPct(pet)) + '%' }"></div></div>
           <span v-if="pet.starToday" class="m-badge-star">🌈</span>
         </button>
         <div v-if="p && !adoptedPets.length" class="m-empty">还没有领养宠物的学生<br/>请先在 PC 端座次表领养</div>
@@ -39,9 +39,9 @@
             <img :src="p.petImg(sheetPet)" class="sheet-img" alt="" />
             <div class="sheet-id">
               <div class="sheet-name">{{ sheetPet.name }}</div>
-              <div class="sheet-lv">{{ sheetPet.petName }} · Lv.{{ sheetPet.level }}</div>
+              <div class="sheet-lv">{{ sheetPet.hatched === 0 ? '🥚 孵化中' : `${sheetPet.petName} · Lv.${sheetPet.level}` }}</div>
             </div>
-            <div class="sheet-exp">{{ p.expPct(sheetPet) }}%</div>
+            <div class="sheet-exp">{{ (sheetPet.hatched === 0 ? p.hatchPct(sheetPet) : p.expPct(sheetPet)) }}%</div>
           </div>
           <div class="sheet-cats">
             <button v-for="c in CATS" :key="c" class="cat-btn"
