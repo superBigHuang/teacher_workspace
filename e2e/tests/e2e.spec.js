@@ -683,11 +683,14 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(page.locator('.el-message--success').first()).toBeVisible()
     })
 
-    await test.step('班级日常：作业收缴选科目后加载名单', async () => {
+    await test.step('班级日常：作业收缴选科目后加载名单（科目只列我教的）', async () => {
       await page.getByText('作业收缴').click()
       const hwPane = page.locator('.el-tab-pane').filter({ hasText: '勾选表示' })
       await hwPane.locator('.el-select').first().click()
-      await page.getByRole('option', { name: '数学' }).click()
+      // 科目下拉只列我担任的科目（需求：不再统一语数英），选第一个可用科目
+      const firstOpt = page.locator('.el-select-dropdown:visible .el-select-dropdown__item').first()
+      await expect(firstOpt).toBeVisible({ timeout: 8000 })
+      await firstOpt.click()
       await expect.poll(async () =>
         await page.locator('.hw-item').count(), { timeout: 15000 }).toBeGreaterThan(35)
     })
@@ -695,6 +698,108 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     await test.step('班级日常：课堂纪律页签可切换', async () => {
       await page.getByText('课堂纪律').click()
       await expect(page.locator('.el-table').first()).toBeVisible()
+    })
+
+    // ============ 11c. 工作台卡片 × 日常联动（三卡名单 + 点击登记跳 tab） ============
+    await test.step('工作台联动：API 构造测试生违纪/作业未交 → stats 三类名单含测试生', async () => {
+      const today = new Date().toISOString().slice(0, 10)
+      // 纪律：直接 API 给测试生登记两条（不依赖速记的学生自动匹配），用于卡片去重 + 悬停看多条
+      for (const content of ['上课说话', '上课吃零食']) {
+        const r = await request.post(API + '/daily/discipline', {
+          headers: authHeader(),
+          data: { date: today, studentIds: [testStudentId], content },
+        })
+        expect((await r.json()).code).toBe(200)
+      }
+      // 作业未交：用 E2E 专用科目名（homework/save 按「日期+科目」整组重写，专用名不碰 admin 真实科目记录）
+      const hwSubject = 'E2E作业科目'
+      const save = await request.post(API + '/daily/homework/save', {
+        headers: authHeader(),
+        data: { date: today, subject: hwSubject, missingIds: [testStudentId] },
+      })
+      expect((await save.json()).code).toBe(200)
+      const stats = (await (await request.get(API + '/dashboard/stats', { headers: authHeader() })).json()).data
+      // 早读异常名单（步骤 11 已标记测试生迟到）
+      expect(stats.attAbnormalList.some(a => a.name === 'E2E测试生' && a.status === '迟到')).toBe(true)
+      // 纪律名单：测试生当天两条（卡片按姓名去重、悬停显示多条）
+      const disItems = stats.disciplineList.filter(d => d.name === 'E2E测试生')
+      expect(disItems.length).toBeGreaterThanOrEqual(2)
+      expect(disItems.some(d => d.content === '上课说话')).toBe(true)
+      // 作业未交名单（姓名+科目），未交人数按去重学生算
+      expect(stats.homeworkList.some(h => h.name === 'E2E测试生' && h.subject === hwSubject)).toBe(true)
+      expect(stats.homeworkMissing).toBeGreaterThanOrEqual(1)
+    })
+
+    await test.step('工作台联动：三卡显示测试生、悬停看违纪详情、点击登记跳对应 tab', async () => {
+      await page.goto('/dashboard')
+      const attCard = page.locator('.work-card.attendance')
+      const disCard = page.locator('.work-card.discipline')
+      const hwCard = page.locator('.work-card.homework')
+      // 早读卡：姓名-状态 tag；纪律/作业卡：去重学生姓名 tag
+      await expect(attCard.locator('.stu-tag', { hasText: 'E2E测试生' })).toBeVisible()
+      await expect(disCard.locator('.stu-tag', { hasText: 'E2E测试生' })).toBeVisible()
+      await expect(hwCard.locator('.stu-tag', { hasText: 'E2E测试生' })).toBeVisible()
+      // 悬停纪律 tag → tooltip 列出该生当天全部违纪（多条都显示）
+      // 卡片在 vuedraggable 内，tooltip 用受控 :visible（mouseenter 绑 el-tag 原生事件）；
+      // popper class 为 .el-popper.el-tooltip（Element Plus 2.8，非旧版 .el-tooltip__popper）
+      const disTag = disCard.locator('.stu-tag', { hasText: 'E2E测试生' }).first()
+      await disTag.scrollIntoViewIfNeeded()
+      await disTag.hover()
+      const tip = page.locator('.el-popper.el-tooltip')
+      await expect(tip.filter({ hasText: '上课说话' })).toBeVisible({ timeout: 8000 })
+      await expect(tip.filter({ hasText: '上课吃零食' })).toBeVisible()
+      // 点击登记 → 直达课堂纪律 tab
+      await disCard.getByRole('button', { name: '点击登记' }).click()
+      await expect(page).toHaveURL(/\/daily\?tab=dis/)
+      await expect(page.locator('.el-tabs__item.is-active')).toContainText('课堂纪律')
+      // 作业卡 → 作业收缴 tab
+      await page.goto('/dashboard')
+      await page.locator('.work-card.homework').getByRole('button', { name: '点击登记' }).click()
+      await expect(page).toHaveURL(/\/daily\?tab=hw/)
+      await expect(page.locator('.el-tabs__item.is-active')).toContainText('作业收缴')
+    })
+
+    await test.step('班级日常：作业科目只列我教的；违纪情况支持历史联想与手输新值', async () => {
+      // —— 作业科目下拉：别人教的科目不出现，我教的（teacher=我/老师名/未填）出现 ——
+      const subjBody = (await (await request.get(API + '/timetable/subjects', { headers: authHeader() })).json()).data
+      const tname = ((await (await request.get(API + '/dashboard/settings', { headers: authHeader() })).json()).data.teacher_name) || ''
+      const mine = subjBody.filter(s => !s.teacher || s.teacher === '我' || s.teacher === tname)
+      const others = subjBody.filter(s => s.teacher && s.teacher !== '我' && s.teacher !== tname)
+      // el-tab-pane 顺序：att(0)/dis(1)/hw(2)/leave(3)；非 filterable 的 el-select 无原生 placeholder，用作用域 .el-select 定位
+      await page.goto('/daily?tab=hw')
+      const hwPane = page.locator('.el-tab-pane').nth(2)
+      await hwPane.locator('.el-select').first().click()
+      const hwOpts = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+      await expect(hwOpts.first()).toBeVisible({ timeout: 8000 })
+      // 等我教的科目出现（确保 teacher_name 设置已加载，避免竞态误判）
+      const myTaught = mine.find(s => s.teacher === '我' || s.teacher === tname)
+      if (myTaught) await expect(hwOpts.filter({ hasText: myTaught.name })).toBeVisible({ timeout: 5000 })
+      const hwTexts = await hwOpts.allInnerTexts()
+      for (const m of mine) expect(hwTexts.some(t => t.includes(m.name))).toBe(true)
+      for (const o of others) expect(hwTexts.some(t => t.includes(o.name))).toBe(false)
+      await page.keyboard.press('Escape')
+      // —— 违纪情况：可输入下拉（dis pane 第 1 个 select=学生多选，第 2 个=违纪情况）——
+      await page.goto('/daily?tab=dis')
+      const disPane = page.locator('.el-tab-pane').nth(1)
+      const contentSel = disPane.locator('.el-select').nth(1)
+      await contentSel.click()
+      await expect(page.getByRole('option', { name: '上课说话', exact: true })).toBeVisible({ timeout: 8000 })
+      await page.keyboard.press('Escape')
+      // 手输新值：filterable 输入框打字 + 回车创建
+      await contentSel.click()
+      await contentSel.locator('input').fill('E2E违纪新情况XYZ')
+      await page.keyboard.press('Enter')
+      // 选违纪学生（多选下拉，选中后不自动关闭，选完 Escape）
+      await disPane.locator('.el-select').first().click()
+      // el-option label 格式为「姓名（学号）」；用精确 role 名避免匹配到同名子串/空名异常项
+      await page.getByRole('option', { name: 'E2E测试生（999）', exact: true }).click()
+      await page.keyboard.press('Escape')
+      await disPane.getByRole('button', { name: '登记', exact: true }).click()
+      await expect(page.locator('.el-message--success').first()).toBeVisible()
+      // 新值已进入历史下拉
+      await contentSel.click()
+      await expect(page.getByRole('option', { name: 'E2E违纪新情况XYZ', exact: true })).toBeVisible({ timeout: 8000 })
+      await page.keyboard.press('Escape')
     })
 
     // ============ 11b. 请假闭环（UI 页签/工作台卡 + API 全链路） ============
@@ -943,11 +1048,24 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(board.locator('.ab-def-row').first()).toBeVisible()
 
       // --- UI 链路：学生抽屉「我的成就」徽章墙 + 角标 ---
-      await page.locator('.filter-bar .el-radio-button', { hasText: '花名册' }).click()
+      // 角标依赖该生「持有徽章」：自动成就只奖励正面行为（测试生有迟到/违纪/作业未交，均不满足），
+      // 故显式授予一枚内置手动成就（体育之星）来确定性验证角标；授予记录随测试生 afterAll 级联清理
+      const builtinDefs = (await (await request.get(API + '/achievement/defs', { headers: authHeader() })).json()).data
+      const manualDef = builtinDefs.find(d => d.builtin === 1 && d.name === '体育之星')
+      expect(manualDef).toBeTruthy()
+      const awUi = await (await request.post(API + '/achievement/award', {
+        headers: authHeader(),
+        data: { defId: manualDef.id, studentIds: [testStudentId], remark: 'E2E角标验证' },
+      })).json()
+      expect(awUi.data.awarded).toBe(1)
+      // 重新进花名册触发静默扫描 + 徽章角标拉取（goto 默认花名册视图）
+      await page.goto('/roster')
+      await expect.poll(async () =>
+        await page.locator('.stu-grid .stu-card').count(), { timeout: 15000 }).toBeGreaterThan(35)
       await page.getByPlaceholder('搜索姓名/学号').fill('E2E测试生')
       await expect.poll(async () =>
         await page.locator('.stu-grid .stu-card').count(), { timeout: 10000 }).toBe(1)
-      await expect(page.locator('.stu-grid .stu-badge').first()).toBeVisible()
+      await expect(page.locator('.stu-grid .stu-badge').first()).toBeVisible({ timeout: 15000 })
       await page.locator('.stu-grid .stu-card').first().click()
       const drawer = page.locator('.el-drawer', { hasText: '的档案' })
       await expect(drawer).toBeVisible()

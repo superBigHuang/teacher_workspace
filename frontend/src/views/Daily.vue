@@ -35,7 +35,11 @@
             <el-select v-model="dis.studentIds" multiple filterable collapse-tags placeholder="选择违纪学生（可多选）" style="min-width:320px">
               <el-option v-for="s in students" :key="s.id" :label="s.name + '（' + s.stu_no + '）'" :value="s.id" />
             </el-select>
-            <el-input v-model="dis.content" placeholder="违纪情况，如：上课吃零食" style="flex:1" />
+            <!-- 违纪情况：可输入下拉（历史记录联想，也可直接打字输新内容回车） -->
+            <el-select v-model="dis.content" filterable allow-create default-first-option
+                       placeholder="违纪情况，如：上课吃零食" style="flex:1;min-width:200px">
+              <el-option v-for="c in disHistory" :key="c" :label="c" :value="c" />
+            </el-select>
             <el-button type="primary" @click="saveDis">登记</el-button>
           </div>
         </el-card>
@@ -54,7 +58,7 @@
         <div class="bar">
           <el-date-picker v-model="hw.date" type="date" value-format="YYYY-MM-DD" @change="loadHw" />
           <el-select v-model="hw.subject" placeholder="选择科目" @change="loadHw" style="width:160px">
-            <el-option v-for="s in subjects" :key="s.id" :label="s.name" :value="s.name" />
+            <el-option v-for="s in mySubjects" :key="s.id" :label="s.name" :value="s.name" />
           </el-select>
           <span class="sum">未交 {{ hwMissing }} 人</span>
           <div class="spacer"></div>
@@ -178,13 +182,17 @@
 
 <script setup>
 import { ref, reactive, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 
+const route = useRoute()
+// 支持工作台卡片跳转带 ?tab=dis|hw|leave 直接定位
+const tab = ref(['att', 'dis', 'hw', 'leave'].includes(route.query.tab) ? route.query.tab : 'att')
 const today = new Date().toISOString().slice(0, 10)
-const tab = ref('att')
 const students = ref([])
 const subjects = ref([])
+const teacherName = ref('')   // 当前老师姓名（科目 teacher 填"我"或姓名都算我教的）
 
 const att = reactive({ date: today, students: [] })
 const dis = reactive({ date: today, studentIds: [], content: '' })
@@ -193,6 +201,12 @@ const hw = reactive({ date: today, subject: '', students: [] })
 
 http.get('/roster/students').then(d => students.value = d)
 http.get('/timetable/subjects').then(d => subjects.value = d)
+http.get('/dashboard/settings').then(s => { teacherName.value = s.teacher_name || '' })
+
+/** 违纪情况历史：去重 content，供可输入下拉联想 */
+const disHistory = computed(() => [...new Set(disList.value.map(d => d.content).filter(Boolean))])
+/** 作业科目只留我担任的：teacher='我' 或 =老师姓名；teacher 未填的科目也保留（无法判定归属，不拦） */
+const mySubjects = computed(() => subjects.value.filter(s => !s.teacher || s.teacher === '我' || s.teacher === teacherName.value))
 
 const attAbnormal = computed(() => att.students.filter(s => s.status !== '出勤').length)
 const attRate = computed(() => att.students.length ? Math.round((att.students.length - attAbnormal.value) * 1000 / att.students.length) / 10 : 0)

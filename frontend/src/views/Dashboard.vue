@@ -106,10 +106,20 @@
     <draggable v-model="cardOrder" :animation="200" :item-key="el => el" class="card-grid" @end="saveOrder">
       <template #item="{ element }">
         <el-card class="work-card" :class="element" shadow="hover">
-          <!-- 早读考勤 -->
+          <!-- 早读考勤：异常学生列出（姓名-状态），全勤则提示 -->
           <div v-if="element === 'attendance'" @click="go('/daily')">
             <div class="wc-head">⏰ 早读考勤 <el-tag size="small" type="success">{{ stats.attPresent || 0 }}/{{ stats.attTotal || 0 }}</el-tag></div>
-            <div class="wc-body">今日全勤 {{ stats.attPresent || 0 }}/{{ stats.attTotal || 0 }} 人</div>
+            <div class="stu-tags">
+              <template v-if="attAbnormal.length">
+                <el-tooltip v-for="a in attAbnormal.slice(0, 10)" :key="a.name" :content="a.name + '：' + a.status" placement="top"
+                            :visible="attTip === a.name" :hide-after="0" :persistent="false">
+                  <el-tag size="small" :type="attTagType(a.status)" effect="light" class="stu-tag"
+                          @mouseenter="attTip = a.name" @mouseleave="attTip = null">{{ a.name }}-{{ a.status }}</el-tag>
+                </el-tooltip>
+                <el-tag v-if="attAbnormal.length > 10" size="small" type="info" effect="plain" class="stu-tag">等 {{ attAbnormal.length }} 人</el-tag>
+              </template>
+              <span v-else class="empty-h">今日全勤 🎉</span>
+            </div>
             <el-button type="primary" text class="wc-btn" @click.stop="go('/daily')">✏️ 点击登记</el-button>
           </div>
           <!-- 我的课表 -->
@@ -153,17 +163,43 @@
               <div v-if="!todayCourses.length" class="empty-h">今日无排课</div>
             </div>
           </div>
-          <!-- 课堂纪律 -->
-          <div v-else-if="element === 'discipline'" @click="go('/daily')">
+          <!-- 课堂纪律：卡片只显示去重学生姓名，悬停列出该生当天全部违纪；点击登记进纪律 tab -->
+          <div v-else-if="element === 'discipline'" @click="go('/daily?tab=dis')">
             <div class="wc-head">📝 课堂纪律 <el-tag size="small" type="info">{{ stats.disciplineToday || 0 }} 条</el-tag></div>
-            <div class="wc-body">今日违纪记录 {{ stats.disciplineToday || 0 }} 条</div>
-            <el-button type="primary" text class="wc-btn" @click.stop="go('/daily')">✏️ 点击登记</el-button>
+            <div class="stu-tags">
+              <template v-if="disGroups.length">
+                <el-tooltip v-for="g in disGroups.slice(0, 10)" :key="g.name" placement="top"
+                            :visible="disTip === g.name" :hide-after="0" :persistent="false">
+                  <template #content>
+                    <div v-for="(it, i) in g.items" :key="i">{{ g.name }}：{{ it.content }}</div>
+                  </template>
+                  <el-tag size="small" type="warning" effect="light" class="stu-tag"
+                          @mouseenter="disTip = g.name" @mouseleave="disTip = null">{{ g.name }}</el-tag>
+                </el-tooltip>
+                <el-tag v-if="disGroups.length > 10" size="small" type="info" effect="plain" class="stu-tag">等 {{ disGroups.length }} 人</el-tag>
+              </template>
+              <span v-else class="empty-h">今日无违纪记录 🎉</span>
+            </div>
+            <el-button type="primary" text class="wc-btn" @click.stop="go('/daily?tab=dis')">✏️ 点击登记</el-button>
           </div>
-          <!-- 作业收缴 -->
-          <div v-else-if="element === 'homework'" @click="go('/daily')">
+          <!-- 作业收缴：去重学生姓名，悬停列出未交科目；点击登记进作业 tab -->
+          <div v-else-if="element === 'homework'" @click="go('/daily?tab=hw')">
             <div class="wc-head">📚 作业收缴 <el-tag size="small" :type="stats.homeworkMissing ? 'danger' : 'success'">{{ stats.homeworkMissing || 0 }} 人未交</el-tag></div>
-            <div class="wc-body">今日作业未交 {{ stats.homeworkMissing || 0 }} 人</div>
-            <el-button type="primary" text class="wc-btn" @click.stop="go('/daily')">✏️ 点击登记</el-button>
+            <div class="stu-tags">
+              <template v-if="hwGroups.length">
+                <el-tooltip v-for="g in hwGroups.slice(0, 10)" :key="g.name" placement="top"
+                            :visible="hwTip === g.name" :hide-after="0" :persistent="false">
+                  <template #content>
+                    <div v-for="(it, i) in g.items" :key="i">{{ g.name }} 未交：{{ it.subject }}</div>
+                  </template>
+                  <el-tag size="small" type="danger" effect="light" class="stu-tag"
+                          @mouseenter="hwTip = g.name" @mouseleave="hwTip = null">{{ g.name }}</el-tag>
+                </el-tooltip>
+                <el-tag v-if="hwGroups.length > 10" size="small" type="info" effect="plain" class="stu-tag">等 {{ hwGroups.length }} 人</el-tag>
+              </template>
+              <span v-else class="empty-h">作业全部收齐 🎉</span>
+            </div>
+            <el-button type="primary" text class="wc-btn" @click.stop="go('/daily?tab=hw')">✏️ 点击登记</el-button>
           </div>
         </el-card>
       </template>
@@ -286,22 +322,49 @@ async function loadHolidays() { holidays.value = await http.get('/dashboard/holi
 async function loadCards() { cardOrder.value = await http.get('/dashboard/cards') }
 async function saveOrder() { await http.post('/dashboard/cards', { order: cardOrder.value }) }
 
+/** 今日我的课：跨【所有班级】（班主任班+任课班）拉 grid 合并，只保留我教的节次（teacher='我' 或 =老师姓名） */
 async function loadTodayCourses() {
   const classes = await http.get('/timetable/classes')
   const home = classes.find(c => c.type === 'HOMEROOM') || classes[0]
   const subjNames = classes.filter(c => c.type === 'SUBJECT').map(c => c.name)
   if (home) homeroomName.value = home.name
   if (subjNames.length) subjectClassNames.value = subjNames
-  if (!home) return
   const dow = new Date().getDay() || 7
-  const grid = await http.get('/timetable/grid', { params: { classId: home.id } })
-  const periodMap = Object.fromEntries(grid.periods.map(p => [p.id, p]))
-  todayCourses.value = grid.cells
-    .filter(c => c.dayOfWeek === dow)
-    .map(c => ({ ...c, ...periodMap[c.periodId] }))
+  const me = settings.teacher_name || ''
+  const rows = []
+  for (const c of classes) {
+    const grid = await http.get('/timetable/grid', { params: { classId: c.id } })
+    const periodMap = Object.fromEntries(grid.periods.map(p => [p.id, p]))
+    for (const cell of grid.cells) {
+      if (cell.dayOfWeek !== dow) continue
+      if (cell.teacher !== '我' && cell.teacher !== me) continue   // 只算我教的
+      rows.push({ ...cell, ...periodMap[cell.periodId] })
+    }
+  }
+  todayCourses.value = rows
     .filter(c => c.name && !c.isBreak)
     .sort((a, b) => (a.sort || 0) - (b.sort || 0))
 }
+
+/** 按学生姓名分组（保持出现顺序）：卡片只显示去重姓名，悬停 tooltip 列出该生当天全部记录 */
+function groupByName(list) {
+  const map = new Map()
+  for (const it of list) {
+    if (!map.has(it.name)) map.set(it.name, [])
+    map.get(it.name).push(it)
+  }
+  return [...map.entries()].map(([name, items]) => ({ name, items }))
+}
+/** 早读异常名单（迟到/请假/缺勤）与状态标签色 */
+const attAbnormal = computed(() => stats.attAbnormalList || [])
+const attTagType = s => (s === '缺勤' ? 'danger' : s === '迟到' ? 'warning' : 'primary')
+/** 纪律/作业：按学生去重分组 */
+const disGroups = computed(() => groupByName(stats.disciplineList || []))
+const hwGroups = computed(() => groupByName(stats.homeworkList || []))
+// 卡片在 vuedraggable 内，el-tooltip 自动悬停绑定会失效，改用受控 visible（mouseenter 绑在 el-tag 原生事件上）
+const attTip = ref(null)
+const disTip = ref(null)
+const hwTip = ref(null)
 
 function go(path) { router.push(path) }
 
@@ -479,6 +542,10 @@ onMounted(async () => {
 .work-card { min-height: 230px; }
 .wc-head { font-weight: 800; color: #5a5f72; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 16px; }
 .wc-body { color: #8a8fa3; margin: 8px 0; }
+/* 卡片内学生名单：去重姓名 tag 横排，悬停看详情 */
+.stu-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; min-height: 24px; align-content: flex-start; }
+.stu-tags .stu-tag { cursor: default; }
+.stu-tags .empty-h { padding: 4px 0; font-size: 13px; }
 .wc-btn, .wc-link { margin-top: 8px; padding: 0; }
 .three-num { display: flex; text-align: center; gap: 8px; margin: 10px 0; }
 .three-num > div { flex: 1; background: #f4f7fd; border-radius: 10px; padding: 10px 4px; }
