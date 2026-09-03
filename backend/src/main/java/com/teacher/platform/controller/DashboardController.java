@@ -77,25 +77,12 @@ public class DashboardController extends BaseController {
         int commToday = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM comm_log WHERE user_id=? AND contact_date=?", Integer.class, uid, todayStr);
 
-        // 当前老师姓名：科目 teacher 字段填"我"或老师姓名都算"我的课"（setting teacher_name 兜底 sys_user.display_name）
-        String teacherName = "";
-        try {
-            teacherName = jdbc.queryForObject(
-                    "SELECT v FROM setting WHERE user_id=? AND k='teacher_name'", String.class, uid);
-        } catch (Exception ignore) { }
-        if (teacherName == null || teacherName.isBlank()) {
-            try {
-                teacherName = jdbc.queryForObject("SELECT display_name FROM sys_user WHERE id=?", String.class, uid);
-            } catch (Exception ignore) { }
-        }
-        if (teacherName == null || teacherName.isBlank()) teacherName = "___NOMATCH___";
-
-        // 今日课程：跨【所有班级】（班主任班+任课班）只统计我教的节次（subject.teacher='我' 或 =老师名）
+        // 今日课程：跨【所有班级】（班主任班+任课班）只统计我教的节次（subject.is_mine=1，科目管理里勾选「我教的」）
         List<Map<String, Object>> todayCells = jdbc.queryForList(
                 "SELECT t.period_id, p.start_time, p.end_time, p.is_break FROM timetable t " +
                 "JOIN period p ON p.id=t.period_id JOIN subject s ON s.id=t.subject_id " +
-                "WHERE t.user_id=? AND t.day_of_week=? AND (s.teacher='我' OR s.teacher=?)",
-                uid, dow, teacherName);
+                "WHERE t.user_id=? AND t.day_of_week=? AND s.is_mine=1",
+                uid, dow);
         int todayCourses = todayCells.size();
         LocalTime now = LocalTime.now();
         int todayRemaining = (int) todayCells.stream().filter(c -> {
@@ -105,8 +92,8 @@ public class DashboardController extends BaseController {
         }).count();
         Integer weekRemaining = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM timetable t JOIN subject s ON s.id=t.subject_id " +
-                "WHERE t.user_id=? AND t.day_of_week>=? AND (s.teacher='我' OR s.teacher=?)",
-                Integer.class, uid, dow, teacherName);
+                "WHERE t.user_id=? AND t.day_of_week>=? AND s.is_mine=1",
+                Integer.class, uid, dow);
 
         // 考勤（异常数 + 异常学生明细，限班主任班）
         int abnormal = jdbc.queryForObject(

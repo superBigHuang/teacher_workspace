@@ -192,7 +192,6 @@ const tab = ref(['att', 'dis', 'hw', 'leave'].includes(route.query.tab) ? route.
 const today = new Date().toISOString().slice(0, 10)
 const students = ref([])
 const subjects = ref([])
-const teacherName = ref('')   // 当前老师姓名（科目 teacher 填"我"或姓名都算我教的）
 
 const att = reactive({ date: today, students: [] })
 const dis = reactive({ date: today, studentIds: [], content: '' })
@@ -201,12 +200,11 @@ const hw = reactive({ date: today, subject: '', students: [] })
 
 http.get('/roster/students').then(d => students.value = d)
 http.get('/timetable/subjects').then(d => subjects.value = d)
-http.get('/dashboard/settings').then(s => { teacherName.value = s.teacher_name || '' })
 
 /** 违纪情况历史：去重 content，供可输入下拉联想 */
 const disHistory = computed(() => [...new Set(disList.value.map(d => d.content).filter(Boolean))])
-/** 作业科目只留我担任的：teacher='我' 或 =老师姓名；teacher 未填的科目也保留（无法判定归属，不拦） */
-const mySubjects = computed(() => subjects.value.filter(s => !s.teacher || s.teacher === '我' || s.teacher === teacherName.value))
+/** 作业科目只留我担任的：科目管理里勾选「我教的」（isMine） */
+const mySubjects = computed(() => subjects.value.filter(s => s.isMine))
 
 const attAbnormal = computed(() => att.students.filter(s => s.status !== '出勤').length)
 const attRate = computed(() => att.students.length ? Math.round((att.students.length - attAbnormal.value) * 1000 / att.students.length) / 10 : 0)

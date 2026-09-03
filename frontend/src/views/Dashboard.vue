@@ -322,7 +322,7 @@ async function loadHolidays() { holidays.value = await http.get('/dashboard/holi
 async function loadCards() { cardOrder.value = await http.get('/dashboard/cards') }
 async function saveOrder() { await http.post('/dashboard/cards', { order: cardOrder.value }) }
 
-/** 今日我的课：跨【所有班级】（班主任班+任课班）拉 grid 合并，只保留我教的节次（teacher='我' 或 =老师姓名） */
+/** 今日我的课：跨【所有班级】（班主任班+任课班）拉 grid 合并，只保留我教的节次（科目勾选了「我教的」isMine） */
 async function loadTodayCourses() {
   const classes = await http.get('/timetable/classes')
   const home = classes.find(c => c.type === 'HOMEROOM') || classes[0]
@@ -330,14 +330,13 @@ async function loadTodayCourses() {
   if (home) homeroomName.value = home.name
   if (subjNames.length) subjectClassNames.value = subjNames
   const dow = new Date().getDay() || 7
-  const me = settings.teacher_name || ''
   const rows = []
   for (const c of classes) {
     const grid = await http.get('/timetable/grid', { params: { classId: c.id } })
     const periodMap = Object.fromEntries(grid.periods.map(p => [p.id, p]))
     for (const cell of grid.cells) {
       if (cell.dayOfWeek !== dow) continue
-      if (cell.teacher !== '我' && cell.teacher !== me) continue   // 只算我教的
+      if (!cell.isMine) continue   // 只算我教的（科目管理里勾选「我教的」）
       rows.push({ ...cell, ...periodMap[cell.periodId] })
     }
   }

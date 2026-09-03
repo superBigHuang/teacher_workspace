@@ -66,9 +66,14 @@
         </el-form>
       </section>
 
-      <!-- 修改密码 -->
+      <!-- 修改密码（右侧"消息推送"按钮打开半页抽屉配置） -->
       <section class="candy-card blue">
-        <h3>🔒 修改密码</h3>
+        <div class="card-head">
+          <h3>🔒 修改密码</h3>
+          <el-button size="small" plain class="push-entry" @click="pushDrawer = true">
+            🔔 消息推送<span v-if="push.enabled" class="push-on-dot" title="推送已开启">●</span>
+          </el-button>
+        </div>
         <el-form label-position="top">
           <el-form-item label="当前密码">
             <el-input v-model="pwd.oldPassword" type="password" show-password placeholder="当前密码" />
@@ -115,6 +120,9 @@
             <span class="sub-dot" :style="{ background: s.color || '#9fc5f8' }"></span>
             <span class="sub-name">{{ s.name }}</span>
             <span class="sub-teacher">{{ s.teacher || '—' }}</span>
+            <el-checkbox :model-value="!!s.isMine" size="small" class="sub-mine"
+              title="勾选后工作台「我的课表/今日课程」、作业科目才算这科"
+              @change="v => toggleMine(s, v)">我教的</el-checkbox>
             <el-popconfirm title="确定删除该学科？" @confirm="delSubject(s)">
               <template #reference><span class="cls-del">✕</span></template>
             </el-popconfirm>
@@ -123,6 +131,7 @@
         <div class="add-row">
           <el-input v-model="newSubject.name" placeholder="学科名，如：语文" />
           <el-input v-model="newSubject.teacher" placeholder="任课教师（选填）" />
+          <el-checkbox v-model="newSubject.isMine" border size="small">我教的</el-checkbox>
           <el-color-picker v-model="newSubject.color" />
           <el-button type="primary" plain @click="addSubject">➕ 添加</el-button>
         </div>
@@ -158,14 +167,15 @@
         </el-form>
       </section>
 
-      <!-- 消息推送（跨两列）：企微/钉钉群机器人 webhook + Bark；密钥不明文回显 -->
-      <section class="candy-card wide push-card">
-        <h3 class="push-head">
-          <span class="push-title">🔔 消息推送
-            <el-switch v-model="push.enabled" class="ai-switch" active-text="开启" inactive-text="关闭" />
-          </span>
+    </div>
+
+    <!-- 消息推送：右侧半页抽屉（入口在"修改密码"卡片旁）；企微/钉钉群机器人 webhook + Bark，密钥不明文回显 -->
+    <el-drawer v-model="pushDrawer" title="🔔 消息推送" direction="rtl" size="520px" append-to-body class="push-drawer">
+      <div class="push-body">
+        <div class="push-toggle">
+          <el-switch v-model="push.enabled" active-text="开启" inactive-text="关闭" />
           <a href="https://www.kdocs.cn/l/cer5TG9NdxvQ" target="_blank" class="push-guide">📖 不会配置？看图文教程</a>
-        </h3>
+        </div>
         <el-form label-position="top" class="form">
           <!-- 企业微信（主推，无需加签） -->
           <div class="push-ch">
@@ -217,8 +227,8 @@
           <el-button type="primary" class="save-btn push-save" :loading="push.saving" @click="savePush">保存推送设置 💾</el-button>
           <p class="privacy-tip">🔒 Webhook/Key 仅保存在本系统后台、不明文回显；配了几个渠道就都会发，推送失败自动跳过不影响使用。</p>
         </el-form>
-      </section>
-    </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -239,7 +249,7 @@ const saving = ref(false)
 const classes = ref([])
 const subjects = ref([])
 const newClass = reactive({ name: '', type: 'SUBJECT', term: '' })
-const newSubject = reactive({ name: '', teacher: '', color: '#9fc5f8' })
+const newSubject = reactive({ name: '', teacher: '', color: '#9fc5f8', isMine: false })
 const pwd = reactive({ oldPassword: '', newPassword: '', confirm: '' })
 const changingPwd = ref(false)
 
@@ -334,6 +344,7 @@ const push = reactive({
   saving: false,
 })
 const pushTesting = ref('')
+const pushDrawer = ref(false)   // 消息推送右侧半页抽屉开关
 const PUSH_EVENT_KEYS = ['todo', 'achievement', 'leave', 'score', 'pet', 'daily']
 
 /** 加载推送配置（密钥不回显，只取掩码与已配置标记） */
@@ -447,8 +458,13 @@ async function addSubject() {
   if (!newSubject.name.trim()) return ElMessage.warning('请输入学科名')
   await http.post('/timetable/subject', { ...newSubject })
   ElMessage.success('学科已添加')
-  newSubject.name = ''; newSubject.teacher = ''
+  newSubject.name = ''; newSubject.teacher = ''; newSubject.isMine = false
   subjects.value = await http.get('/timetable/subjects')
+}
+/** 切换某科「我教的」标记（工作台我的课/作业科目按此判定） */
+async function toggleMine(s, v) {
+  s.isMine = v
+  await http.put(`/timetable/subject/${s.id}`, s)
 }
 async function delSubject(s) {
   await http.delete(`/timetable/subject/${s.id}`)
@@ -474,7 +490,7 @@ onMounted(load)
 }
 .candy-card::before {
   content: ''; position: absolute; top: -34px; right: -34px; width: 110px; height: 110px;
-  border-radius: 50%; opacity: .35;
+  border-radius: 50%; opacity: .35; pointer-events: none;
 }
 .candy-card.pink::before { background: #ffd9e8; }
 .candy-card.blue::before { background: #d9e8ff; }
@@ -525,11 +541,14 @@ onMounted(load)
 .ai-test-result { margin-bottom: 12px; }
 .privacy-tip { color: #b7a6b8; font-size: 12px; line-height: 1.6; margin: 4px 0 0; }
 
-/* 消息推送卡（瀑布流中跨两列） */
-.candy-card.wide { column-span: all; -webkit-column-span: all; }
-.push-card::before { background: #ffe0c9; }
-.push-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
-.push-title { display: flex; align-items: center; gap: 8px; }
+/* 修改密码卡标题行：右侧放消息推送入口按钮 */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+.card-head h3 { margin: 0; }
+.push-entry { font-weight: 700; color: #e08a5e; }
+.push-on-dot { color: #5fc88f; font-size: 9px; margin-left: 3px; vertical-align: middle; }
+
+/* 消息推送右侧半页抽屉 */
+.push-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .push-guide { font-size: 13px; color: #e08a5e; font-weight: 700; text-decoration: none; }
 .push-guide:hover { text-decoration: underline; }
 .push-ch { background: #faf7ff; border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; }

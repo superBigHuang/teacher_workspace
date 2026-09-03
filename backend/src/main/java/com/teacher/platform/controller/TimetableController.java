@@ -55,22 +55,34 @@ public class TimetableController extends BaseController {
     @GetMapping("/subjects")
     public Result<List<Map<String, Object>>> subjects() {
         return Result.ok(jdbc.queryForList(
-                "SELECT id,name,teacher,color FROM subject WHERE user_id=? ORDER BY id", uid()));
+                "SELECT id,name,teacher,color,is_mine isMine FROM subject WHERE user_id=? ORDER BY id", uid()));
     }
 
     @PostMapping("/subject")
     public Result<Long> addSubject(@RequestBody Map<String, Object> body) {
-        jdbc.update("INSERT INTO subject(user_id,name,teacher,color) VALUES(?,?,?,?)",
+        jdbc.update("INSERT INTO subject(user_id,name,teacher,color,is_mine) VALUES(?,?,?,?,?)",
                 uid(), str(body.get("name")), str(body.get("teacher")),
-                str(body.getOrDefault("color", "#9fc5f8")));
+                str(body.getOrDefault("color", "#9fc5f8")),
+                boolBody(body, "isMine") ? 1 : 0);
         return Result.ok(jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class));
     }
 
     @PutMapping("/subject/{id}")
     public Result<Void> updateSubject(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        jdbc.update("UPDATE subject SET name=?,teacher=?,color=? WHERE id=? AND user_id=?",
-                str(body.get("name")), str(body.get("teacher")), str(body.get("color")), id, uid());
+        jdbc.update("UPDATE subject SET name=?,teacher=?,color=?,is_mine=? WHERE id=? AND user_id=?",
+                str(body.get("name")), str(body.get("teacher")), str(body.get("color")),
+                boolBody(body, "isMine") ? 1 : 0, id, uid());
         return Result.ok();
+    }
+
+    /** 解析请求体布尔字段：兼容 true/false、1/0、"true"/"1"（前端 el-checkbox 可能传布尔或数字） */
+    private boolean boolBody(Map<String, Object> body, String key) {
+        Object v = body.get(key);
+        if (v == null) return false;
+        if (v instanceof Boolean b) return b;
+        if (v instanceof Number n) return n.intValue() != 0;
+        String s = String.valueOf(v).trim();
+        return "1".equals(s) || "true".equalsIgnoreCase(s);
     }
 
     @DeleteMapping("/subject/{id}")
@@ -120,7 +132,7 @@ public class TimetableController extends BaseController {
                 "SELECT id,name,start_time startTime,end_time endTime,sort,is_break isBreak FROM period ORDER BY sort");
         List<Map<String, Object>> cells = jdbc.queryForList(
                 "SELECT t.day_of_week dayOfWeek, t.period_id periodId, t.subject_id subjectId, " +
-                "sub.name subjectName, sub.teacher, sub.color " +
+                "sub.name subjectName, sub.teacher, sub.color, sub.is_mine isMine " +
                 "FROM timetable t LEFT JOIN subject sub ON sub.id=t.subject_id " +
                 "WHERE t.user_id=? AND t.class_id=?", uid, classId);
         return Result.ok(Map.of("periods", periods, "cells", cells));

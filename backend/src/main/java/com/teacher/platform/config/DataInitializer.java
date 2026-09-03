@@ -70,6 +70,18 @@ public class DataInitializer implements CommandLineRunner {
                 "tiered TINYINT NOT NULL DEFAULT 0 COMMENT '1=可进阶（铜银金三档），0=固定档'");
         ensureColumn("student_achievement", "tier",
                 "tier VARCHAR(16) NULL COMMENT '当前持有档 BRONZE/SILVER/GOLD/PLATINUM；NULL=老数据回退 def.tier'");
+        // 科目「我教的」显式标记：工作台"我的课"/作业科目按 is_mine 判定，不再靠 teacher 文本猜。
+        // 仅在首次加列当次把存量 teacher='我' 的科目回填为勾选；之后老师手动勾选/取消不再被覆盖。
+        try {
+            if (!columnExists("subject", "is_mine")) {
+                jdbc.execute("ALTER TABLE subject ADD COLUMN is_mine TINYINT NOT NULL DEFAULT 0 " +
+                        "COMMENT '1=我任教的科目（工作台我的课/作业科目按此判定）'");
+                int n = jdbc.update("UPDATE subject SET is_mine=1 WHERE teacher='我'");
+                System.out.println("[migrate] subject.is_mine 已添加，回填 teacher='我' 科目 " + n + " 条");
+            }
+        } catch (Exception e) {
+            System.out.println("[migrate] subject.is_mine 跳过：" + e.getMessage());
+        }
 
         // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
         rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");

@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS subject (
   name VARCHAR(32) NOT NULL,
   teacher VARCHAR(64),
   color VARCHAR(16),
+  is_mine TINYINT NOT NULL DEFAULT 0 COMMENT '1=我任教的科目（工作台我的课/作业科目按此判定，不靠 teacher 文本猜）',
   KEY idx_subject_user (user_id)
 );
 

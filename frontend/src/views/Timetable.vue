@@ -67,13 +67,18 @@
     </el-dialog>
 
     <!-- 科目管理 -->
-    <el-dialog v-model="subjectDlg" title="管理科目" width="560px">
+    <el-dialog v-model="subjectDlg" title="管理科目" width="620px">
       <el-table :data="subjects" size="small" max-height="360">
         <el-table-column label="颜色" width="70">
           <template #default="{ row }"><el-color-picker v-model="row.color" @change="updSubject(row)" /></template>
         </el-table-column>
         <el-table-column label="科目" width="120"><template #default="{ row }"><el-input v-model="row.name" size="small" @change="updSubject(row)" /></template></el-table-column>
         <el-table-column label="任课教师"><template #default="{ row }"><el-input v-model="row.teacher" size="small" @change="updSubject(row)" /></template></el-table-column>
+        <el-table-column label="我教的" width="68" align="center">
+          <template #default="{ row }">
+            <el-checkbox v-model="row.isMine" @change="updSubject(row)" title="勾选后工作台「我的课表/今日课程」、作业科目才会算这科" />
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="70"><template #default="{ row }"><el-button type="danger" text size="small" @click="delSubject(row)">删除</el-button></template></el-table-column>
       </el-table>
       <el-button type="primary" plain class="mt" :icon="Plus" @click="addSubject">新增科目</el-button>
@@ -185,7 +190,7 @@ async function renameClass() {
 
 // 科目
 async function addSubject() {
-  await http.post('/timetable/subject', { name: '新科目', teacher: '', color: '#9fc5f8' })
+  await http.post('/timetable/subject', { name: '新科目', teacher: '', color: '#9fc5f8', isMine: false })
   subjects.value = await http.get('/timetable/subjects')
 }
 async function updSubject(row) {

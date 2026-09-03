@@ -261,26 +261,31 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     })
 
     // ============ 0c. 个人设置页 ============
-    await test.step('个人设置：侧边栏入口进入，六个设置卡（含 AI 助手/消息推送）可见', async () => {
+    await test.step('个人设置：五个设置卡；消息推送入口在修改密码旁、点开为右侧半页抽屉', async () => {
       await page.locator('.action-item', { hasText: '个人设置' }).click()
       await expect(page).toHaveURL(/\/settings/)
-      await expect(page.locator('.candy-card')).toHaveCount(6)
+      await expect(page.locator('.candy-card')).toHaveCount(5)
       await expect(page.locator('.candy-card h3', { hasText: '修改密码' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: '我的班级' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: '我的学科' })).toBeVisible()
       await expect(page.locator('.candy-card h3', { hasText: 'AI 助手' })).toBeVisible()
 
-      // 消息推送卡（跨两列）：总开关/三渠道/教程链接/本期事件开关/即将支持
-      const pushCard = page.locator('.candy-card', { hasText: '消息推送' })
-      await expect(pushCard).toBeVisible()
-      await expect(pushCard.locator('.el-switch')).toBeVisible()
-      await expect(pushCard.getByRole('link', { name: /图文教程/ })).toBeVisible()
+      // 消息推送：入口按钮在"修改密码"卡标题旁，点击滑出右侧半页抽屉（开关/三渠道/教程/事件开关）
+      const pwdCard = page.locator('.candy-card', { hasText: '修改密码' })
+      await expect(pwdCard.locator('.push-entry')).toBeVisible()
+      await pwdCard.locator('.push-entry').click()
+      const pushDrawer = page.locator('.push-drawer')
+      await expect(pushDrawer).toBeVisible()
+      await expect(pushDrawer.locator('.el-switch')).toBeVisible()
+      await expect(pushDrawer.getByRole('link', { name: /图文教程/ })).toBeVisible()
       for (const t of ['企业微信群机器人', '钉钉群机器人', 'Bark']) {
-        await expect(pushCard.getByText(t).first()).toBeVisible()
+        await expect(pushDrawer.getByText(t).first()).toBeVisible()
       }
-      await expect(pushCard.locator('.el-checkbox', { hasText: '待办到期' })).toBeVisible()
-      await expect(pushCard.locator('.el-checkbox', { hasText: '学生成就早报' })).toBeVisible()
-      await expect(pushCard.locator('.el-checkbox.is-disabled', { hasText: '即将支持' }).first()).toBeVisible()
+      await expect(pushDrawer.locator('.el-checkbox', { hasText: '待办到期' })).toBeVisible()
+      await expect(pushDrawer.locator('.el-checkbox', { hasText: '学生成就早报' })).toBeVisible()
+      await expect(pushDrawer.locator('.el-checkbox.is-disabled', { hasText: '即将支持' }).first()).toBeVisible()
+      await pushDrawer.locator('.el-drawer__close-btn').click()
+      await expect(pushDrawer).toBeHidden()
       // .cards 两列瀑布流（卡片紧凑紧挨，修豆腐块松散/密码卡大片留白）
       const cardsCols = await page.locator('.cards').evaluate(el => getComputedStyle(el).columnCount)
       expect(cardsCols).toBe('2')
@@ -928,24 +933,39 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     })
 
     await test.step('班级日常：作业科目只列我教的；违纪情况支持历史联想与手输新值', async () => {
-      // —— 作业科目下拉：别人教的科目不出现，我教的（teacher=我/老师名/未填）出现 ——
-      const subjBody = (await (await request.get(API + '/timetable/subjects', { headers: authHeader() })).json()).data
-      const tname = ((await (await request.get(API + '/dashboard/settings', { headers: authHeader() })).json()).data.teacher_name) || ''
-      const mine = subjBody.filter(s => !s.teacher || s.teacher === '我' || s.teacher === tname)
-      const others = subjBody.filter(s => s.teacher && s.teacher !== '我' && s.teacher !== tname)
-      // el-tab-pane 顺序：att(0)/dis(1)/hw(2)/leave(3)；非 filterable 的 el-select 无原生 placeholder，用作用域 .el-select 定位
-      await page.goto('/daily?tab=hw')
-      const hwPane = page.locator('.el-tab-pane').nth(2)
-      await hwPane.locator('.el-select').first().click()
-      const hwOpts = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
-      await expect(hwOpts.first()).toBeVisible({ timeout: 8000 })
-      // 等我教的科目出现（确保 teacher_name 设置已加载，避免竞态误判）
-      const myTaught = mine.find(s => s.teacher === '我' || s.teacher === tname)
-      if (myTaught) await expect(hwOpts.filter({ hasText: myTaught.name })).toBeVisible({ timeout: 5000 })
-      const hwTexts = await hwOpts.allInnerTexts()
-      for (const m of mine) expect(hwTexts.some(t => t.includes(m.name))).toBe(true)
-      for (const o of others) expect(hwTexts.some(t => t.includes(o.name))).toBe(false)
-      await page.keyboard.press('Escape')
+      // —— 作业科目下拉：只列勾选了「我教的」(isMine) 的科目 ——
+      // 临时科目验证勾选链路：建 isMine=true 科目应出现在下拉，取消勾选后消失（finally 删除，不污染真实科目）
+      const tmpSub = (await (await request.post(API + '/timetable/subject', { headers: authHeader(),
+        data: { name: 'E2E我教科目', teacher: '', color: '#cccccc', isMine: true } })).json()).data
+      try {
+        const subjBody = (await (await request.get(API + '/timetable/subjects', { headers: authHeader() })).json()).data
+        const mine = subjBody.filter(s => s.isMine)
+        const others = subjBody.filter(s => !s.isMine)
+        expect(mine.some(s => s.name === 'E2E我教科目')).toBe(true)
+        // el-tab-pane 顺序：att(0)/dis(1)/hw(2)/leave(3)；非 filterable 的 el-select 无原生 placeholder，用作用域 .el-select 定位
+        await page.goto('/daily?tab=hw')
+        const hwPane = page.locator('.el-tab-pane').nth(2)
+        await hwPane.locator('.el-select').first().click()
+        const hwOpts = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+        await expect(hwOpts.first()).toBeVisible({ timeout: 8000 })
+        // 勾选「我教的」的临时科目出现；我教的都在、别人教的（语文/数学等）都不在
+        await expect(hwOpts.filter({ hasText: 'E2E我教科目' })).toBeVisible({ timeout: 5000 })
+        const hwTexts = await hwOpts.allInnerTexts()
+        for (const m of mine) expect(hwTexts.some(t => t.includes(m.name))).toBe(true)
+        for (const o of others) expect(hwTexts.some(t => t.includes(o.name))).toBe(false)
+        await page.keyboard.press('Escape')
+        // 取消勾选 → 重新进页面后临时科目从下拉消失
+        await request.put(API + '/timetable/subject/' + tmpSub, { headers: authHeader(),
+          data: { name: 'E2E我教科目', teacher: '', color: '#cccccc', isMine: false } })
+        await page.goto('/daily?tab=hw')
+        await page.locator('.el-tab-pane').nth(2).locator('.el-select').first().click()
+        const hwOpts2 = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+        await expect(hwOpts2.first()).toBeVisible({ timeout: 8000 })
+        await expect(hwOpts2.filter({ hasText: 'E2E我教科目' })).toHaveCount(0)
+        await page.keyboard.press('Escape')
+      } finally {
+        await request.delete(API + '/timetable/subject/' + tmpSub, { headers: authHeader() })
+      }
       // —— 违纪情况：可输入下拉（dis pane 第 1 个 select=学生多选，第 2 个=违纪情况）——
       await page.goto('/daily?tab=dis')
       const disPane = page.locator('.el-tab-pane').nth(1)
