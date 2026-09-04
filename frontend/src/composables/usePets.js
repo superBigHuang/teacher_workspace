@@ -298,19 +298,12 @@ export function usePets(opts = {}) {
   function onCardClick(p) {
     if (batchMode.value) { togglePick(p.studentId); return }
     if (!p.petId) { openAdopt(p); return }
-    // 孵化中的蛋：摇晃 + 提示攒能量进度，不弹领养/详情窗（保持期待感）
-    if (p.hatched === 0) { wiggleEgg(p); return }
+    // 蛋与破壳宠物一致：点击弹详情窗（蛋态详情内有孵化进度与流水）；摇晃反馈保留
+    if (p.hatched === 0) {
+      eggWiggle.value.set(p.studentId, true)
+      setTimeout(() => eggWiggle.value.delete(p.studentId), 500)
+    }
     openDetail(p)
-  }
-
-  /** 孵化中蛋点击反馈：左右摇晃 0.5s + ElMessage 提示还差多少成长值破壳；加分飘字等照常，不受影响 */
-  function wiggleEgg(p) {
-    eggWiggle.value.set(p.studentId, true)
-    setTimeout(() => eggWiggle.value.delete(p.studentId), 500)
-    const left = Math.max(0, HATCH_EXP - (p.exp || 0))
-    ElMessage.info(left > 0
-      ? `🥚 ${p.petName || '小精灵'} 还在蛋里攒能量，再得 ${left} 成长值就破壳啦！`
-      : `🥚 ${p.petName || '小精灵'} 能量已满，回到座位上就会破壳啦！`)
   }
   function togglePick(sid) {
     const s = new Set(selected.value)

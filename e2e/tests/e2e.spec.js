@@ -1298,10 +1298,15 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       // 蛋态 UI：蛋图（dragon_egg）+ 暖光浮动 class + 右上角 ✨
       await expect(myCard.locator('img.egg[src*="dragon_egg.webp"]')).toBeVisible()
       await expect(myCard.locator('.egg-spark')).toBeVisible()
-      // 点击蛋：ElMessage 提示还差多少成长值破壳，不弹详情/领养窗（无可见弹窗遮罩；关闭的弹窗 DOM 仍常驻）
+      // 点击蛋：与动物一致弹宠物详情窗（蛋态显示孵化进度与流水；仅遮罩，无其他弹窗）
       await myCard.click()
-      await expect(page.locator('.el-message', { hasText: '成长值就破壳' })).toBeVisible({ timeout: 5000 })
-      await expect(page.locator('.el-overlay:visible')).toHaveCount(0)
+      const eggDetail = page.locator('.el-dialog', { hasText: '孵化中' }).last()
+      await expect(eggDetail).toBeVisible({ timeout: 5000 })
+      await expect(page.locator('.el-overlay:visible')).toHaveCount(1)
+      // 详情内容：标题含「孵化中」、孵化进度提示（成长值就破壳）
+      await expect(eggDetail).toContainText('成长值就破壳')
+      await page.keyboard.press('Escape')
+      await expect(eggDetail).toBeHidden({ timeout: 5000 })
 
       // 经验不足（exp=0 < 20）：hatch-seen 不带 force → 经验守卫 changed=false，hatched 仍 0
       r = await apiPost('/pet/hatch-seen', { studentId: testStudentId })
@@ -1459,7 +1464,8 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(rule5).toBeTruthy()
       expect(ruleMinus).toBeTruthy()
 
-      // 11f 末尾毕业典礼后宠物轮回为新蛋（hatched=0、exp=0）：dev force 跳过经验校验直接破壳，否则点击蛋只提示不弹窗
+      // 11f 末尾毕业典礼后宠物轮回为新蛋（hatched=0、exp=0）：dev force 跳过经验校验直接破壳
+      // （点击蛋与动物一致弹详情窗，孵化进度见蛋态详情）
       const hatchR = await apiPost('/pet/hatch-seen', { studentId: testStudentId, force: true })
       expect(hatchR.data.changed).toBe(true)
 
