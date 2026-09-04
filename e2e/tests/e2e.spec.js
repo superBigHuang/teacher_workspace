@@ -11,13 +11,13 @@ import path from 'path'
 const PWD = '123456'
 const API = '/api'
 const EXAM_NAMES = ['E2E摸底考', 'E2E月考', 'E2E学期中考']
-// E2E 专用注册账号：固定账号名，重复运行时注册会失败但登录仍成功，库中只留一个测试账号
+// E2E 专用测试账号（注册已下线，需库中预置：建号 + UserDataSeeder 播种）
 const NU = 'e2e_teacher'
 const NU_PWD = 'e2e123456'
 const NU_PWD2 = 'e2e654321'
 
 let token = ''
-let nuToken = ''         // E2E 注册新账号的 token（数据隔离验证用）
+let nuToken = ''         // E2E 测试账号的 token（数据隔离验证用）
 let students = []        // 真实学生名单（来自 API）
 let firstStudent = ''    // 第一个真实学生姓名，用于搜索
 let testStudentId = null // 临时测试学生 id
@@ -199,15 +199,15 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
   })
 
   test('登录 → 8 大模块 → 日常速记 → 删除验证 → 刷新保活', async ({ page, request }) => {
-    // ============ 0. 登录 / 注册页 ============
-    await test.step('登录页：注册 Tab 含邀请码；错误密码提示；账号密码登录进入', async () => {
+    // ============ 0. 登录页 ============
+    await test.step('登录页：无注册入口；错误密码提示；账号密码登录进入', async () => {
       await page.goto('/')
       await expect(page).toHaveURL(/\/login/)
-      // 注册 Tab：账号/密码/确认密码/邀请码 四个输入框
-      await page.locator('.tab', { hasText: '注册' }).click()
-      await expect(page.getByPlaceholder('邀请码（选填）')).toBeVisible()
-      await expect(page.getByPlaceholder('确认密码')).toBeVisible()
-      await page.locator('.tab', { hasText: '登录' }).click()
+      // 注册已下线：页面无注册 Tab，注册接口返回非 200
+      await expect(page.locator('.tab', { hasText: '注册' })).toHaveCount(0)
+      const reg = await request.post(API + '/auth/register',
+        { data: { username: 'blocked_user', password: 'blocked123' } })
+      expect(reg.status()).not.toBe(200)
       // 错误密码 → 报错提示
       await page.getByPlaceholder('账号').fill('admin')
       await page.getByPlaceholder('密码').first().fill('000000')
@@ -222,12 +222,10 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(page.locator('.user-area .user-name')).toBeVisible()
     })
 
-    // ============ 0b. 注册新账号 / 数据隔离 / 学校共享记忆 / 改密码（API 级） ============
-    await test.step('账号体系：注册新账号 → 数据独立 → 学校记忆跨账号共享 → 改密码', async () => {
+    // ============ 0b. 既有账号 / 数据隔离 / 学校共享记忆 / 改密码（API 级） ============
+    await test.step('账号体系：预置账号 e2e_teacher → 数据独立 → 学校记忆跨账号共享 → 改密码', async () => {
       const nuAuth = () => ({ Authorization: 'Bearer ' + nuToken })
-      // 注册（首次运行成功；重复运行账号已存在则忽略，后续登录验证）
-      await request.post(API + '/auth/register',
-        { data: { username: NU, password: NU_PWD, inviteCode: 'E2E' } })
+      // 注册已下线：e2e_teacher 由部署预置（若缺此账号需先在库中建号并跑 UserDataSeeder）
       const login = await request.post(API + '/auth/login', { data: { username: NU, password: NU_PWD } })
       const lb = await login.json()
       expect(lb.code).toBe(200)

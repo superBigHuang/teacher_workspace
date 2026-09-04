@@ -11,49 +11,31 @@
       <div class="hello">
         <div class="avatar">🐻</div>
         <h2>班主任工作台</h2>
-        <p class="sub">{{ tab === 'login' ? '欢迎回来，今天也要开心呀～' : '注册新账号，开始你的减负之旅' }}</p>
+        <p class="sub">欢迎回来，今天也要开心呀～</p>
       </div>
 
-      <div class="tabs">
-        <div class="tab" :class="{ on: tab === 'login' }" @click="tab = 'login'">🔑 登录</div>
-        <div class="tab" :class="{ on: tab === 'register' }" @click="tab = 'register'">✨ 注册</div>
-      </div>
-
-      <!-- 登录 -->
-      <div v-if="tab === 'login'" class="form">
+      <!-- 登录（自助注册已下线，账号请联系管理员开通） -->
+      <div class="form">
         <el-input v-model="loginForm.username" size="large" placeholder="账号" :prefix-icon="User" class="field" />
         <el-input v-model="loginForm.password" type="password" size="large" show-password
           placeholder="密码" :prefix-icon="Lock" class="field" @keyup.enter="login" />
         <el-button type="primary" size="large" class="enter" :loading="loading" @click="login">进入工作台 🚪</el-button>
-      </div>
-
-      <!-- 注册 -->
-      <div v-else class="form">
-        <el-input v-model="regForm.username" size="large" placeholder="账号（至少 3 个字符）" :prefix-icon="User" class="field" />
-        <el-input v-model="regForm.password" type="password" size="large" show-password
-          placeholder="密码（至少 6 位）" :prefix-icon="Lock" class="field" />
-        <el-input v-model="regForm.confirm" type="password" size="large" show-password
-          placeholder="确认密码" :prefix-icon="Lock" class="field" @keyup.enter="register" />
-        <el-input v-model="regForm.inviteCode" size="large" placeholder="邀请码（选填）" :prefix-icon="Ticket" class="field" @keyup.enter="register" />
-        <el-button type="primary" size="large" class="enter candy-btn" :loading="loading" @click="register">注册并进入 🎀</el-button>
-        <p class="hint">注册后自动获得一套空的班级脚手架，数据仅你可见</p>
+        <p class="hint">还没有账号？请联系管理员开通</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, Ticket } from '@element-plus/icons-vue'
+import { User, Lock } from '@element-plus/icons-vue'
 import http from '../api/http'
 
 const router = useRouter()
-const tab = ref('login')
 const loading = ref(false)
 const loginForm = reactive({ username: '', password: '' })
-const regForm = reactive({ username: '', password: '', confirm: '', inviteCode: '' })
 
 /** 保存登录态并跳转工作台 */
 function saveAuth(data) {
@@ -72,27 +54,6 @@ async function login() {
       username: loginForm.username.trim(),
       password: loginForm.password
     })
-    saveAuth(data)
-  } catch (e) {
-    // 拦截器已提示
-  } finally {
-    loading.value = false
-  }
-}
-
-async function register() {
-  const username = regForm.username.trim()
-  if (username.length < 3) return ElMessage.warning('账号至少 3 个字符')
-  if (regForm.password.length < 6) return ElMessage.warning('密码至少 6 位')
-  if (regForm.password !== regForm.confirm) return ElMessage.warning('两次输入的密码不一致')
-  loading.value = true
-  try {
-    const data = await http.post('/auth/register', {
-      username,
-      password: regForm.password,
-      inviteCode: regForm.inviteCode.trim()
-    })
-    ElMessage.success('注册成功，欢迎加入 🎉')
     saveAuth(data)
   } catch (e) {
     // 拦截器已提示
@@ -138,23 +99,10 @@ async function register() {
 h2 { margin: 10px 0 4px; color: #6b5b73; font-size: 22px; letter-spacing: 1px; }
 .sub { color: #b7a6b8; margin: 0 0 20px; font-size: 13px; }
 
-.tabs {
-  display: flex; background: #fdf1f6; border-radius: 16px; padding: 5px; margin-bottom: 20px;
-}
-.tab {
-  flex: 1; text-align: center; padding: 9px 0; border-radius: 12px; cursor: pointer;
-  font-size: 15px; font-weight: 700; color: #c29bb0; transition: all .2s;
-}
-.tab.on {
-  background: linear-gradient(135deg, #ff9ec4, #ffb38a);
-  color: #fff; box-shadow: 0 4px 12px rgba(255,150,180,.45);
-}
-
 .field { margin-bottom: 14px; }
 .enter {
   width: 100%; font-size: 16px; font-weight: 800; height: 46px; border-radius: 14px;
   border: none; margin-top: 2px;
 }
-.candy-btn { background: linear-gradient(135deg, #8fd3b0, #7fb8f0); }
 .hint { color: #cdb9c9; font-size: 12px; margin: 14px 0 0; }
 </style>

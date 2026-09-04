@@ -3,7 +3,6 @@ package com.teacher.platform.auth;
 import com.teacher.platform.common.CurrentUser;
 import com.teacher.platform.common.JwtUtil;
 import com.teacher.platform.common.Result;
-import com.teacher.platform.config.UserDataSeeder;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +14,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 注册 / 登录 / 当前账号 / 修改密码
+ * 登录 / 当前账号 / 修改密码
+ * （自助注册已下线：账号由管理员后台建号，/register 端点已移除）
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -25,37 +25,11 @@ public class AuthController {
 
     private final JdbcTemplate jdbc;
     private final JwtUtil jwtUtil;
-    private final UserDataSeeder seeder;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil, UserDataSeeder seeder) {
+    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil) {
         this.jdbc = jdbc;
         this.jwtUtil = jwtUtil;
-        this.seeder = seeder;
-    }
-
-    /** 注册：账号 + 密码（邀请码本期不强制校验）；注册成功即登录，并初始化该账号默认数据 */
-    @PostMapping("/register")
-    public Result<Map<String, Object>> register(@RequestBody Map<String, Object> body) {
-        String username = str(body.get("username"));
-        String password = str(body.get("password"));
-        String displayName = str(body.get("displayName"));
-        // inviteCode 暂留字段、不做强制校验
-        if (username.isBlank()) return Result.fail("请输入账号");
-        if (username.length() < 3) return Result.fail("账号至少 3 位");
-        if (password.length() < 6) return Result.fail("密码至少 6 位");
-        Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM sys_user WHERE username=?", Integer.class, username);
-        if (cnt != null && cnt > 0) return Result.fail("账号已存在，请换一个");
-
-        String dn = displayName.isBlank() ? username : displayName;
-        jdbc.update("INSERT INTO sys_user(username,password_hash,display_name) VALUES(?,?,?)",
-                username, encoder.encode(password), dn);
-        Long uid = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
-        // 为新账号播种默认班级/科目/值日等空架子
-        seeder.seedIfEmpty(uid, dn);
-
-        String token = jwtUtil.generate(uid, username);
-        return Result.ok(Map.of("token", token, "displayName", dn, "username", username));
     }
 
     /** 登录：账号 + 密码 */
