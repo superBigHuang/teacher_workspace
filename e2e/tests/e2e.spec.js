@@ -128,6 +128,19 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await request.post(API + '/dashboard/settings', { headers: authHeader(), data: { pet_auto_deduct: '1' } })
     } catch (e) { /* 忽略 */ }
     try {
+      // 题库兜底清理：删 E2E 分类下的题目，再删空分类（顺序必须先题后分类），防 11j 中途失败残留
+      const cats = (await (await request.get(API + '/quiz/categories', { headers: authHeader() })).json()).data || []
+      for (const c of cats) {
+        if (!String(c.name || '').includes('E2E')) continue
+        const rows = (await (await request.get(API + '/quiz/list', {
+          headers: authHeader(), params: { categoryId: c.id, size: 200 } })).json()).data?.rows || []
+        for (const q of rows) {
+          await request.delete(API + '/quiz/' + q.id, { headers: authHeader() })
+        }
+        await request.post(API + '/quiz/category/delete/' + c.id, { headers: authHeader() })
+      }
+    } catch (e) { /* 忽略 */ }
+    try {
       // 恢复 AI 启用（11c 步骤临时关闭走模板；admin 为真实使用账号）
       await request.put(API + '/ai/config', { headers: authHeader(), data: { enabled: true } })
     } catch (e) { /* 忽略 */ }
@@ -1679,6 +1692,183 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       for (const sid of boardSids) {
         await request.delete(API + '/roster/student/' + sid, { headers: authHeader() })
       }
+    })
+
+    // ============ 11j. 题库 ============
+    await test.step('题库：分类/题目增删改查、Excel 导入、抽题降权（两题交替）；/pet 题库管理弹窗走查（自清理）', async () => {
+      const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
+      const apiGet = (url) => j(request.get.bind(request), API + url)
+      const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
+
+      // ① 分类：新增（enabled 默认 1、questionCount=0）→ 改名换图标 → 停用（enabled=0）
+      const catAdd = await apiPost('/quiz/category', { name: 'E2E题库分类', icon: '🧪' })
+      expect(catAdd.code).toBe(200)
+      const catId = catAdd.data.id
+      expect(catId).toBeTruthy()
+      let cats = (await apiGet('/quiz/categories')).data
+      let cat = cats.find(c => c.id === catId)
+      expect(cat).toBeTruthy()
+      expect(cat.name).toBe('E2E题库分类')
+      expect(cat.icon).toBe('🧪')
+      expect(cat.enabled).toBe(1)
+      expect(cat.questionCount).toBe(0)
+      // 校验拦截：空名称 fail
+      const catBad = await apiPost('/quiz/category', { name: '' })
+      expect(catBad.code).not.toBe(200)
+      // 改名换图标
+      const catUpd = await apiPost('/quiz/category', { id: catId, name: 'E2E题库分类2', icon: '🔬' })
+      expect(catUpd.code).toBe(200)
+      cats = (await apiGet('/quiz/categories')).data
+      cat = cats.find(c => c.id === catId)
+      expect(cat.name).toBe('E2E题库分类2')
+      expect(cat.icon).toBe('🔬')
+      // 停用
+      const catOff = await apiPost('/quiz/category', { id: catId, name: 'E2E题库分类2', icon: '🔬', enabled: 0 })
+      expect(catOff.code).toBe(200)
+      cats = (await apiGet('/quiz/categories')).data
+      expect(cats.find(c => c.id === catId).enabled).toBe(0)
+      // 恢复启用（后续抽题要用）
+      await apiPost('/quiz/category', { id: catId, name: 'E2E题库分类2', icon: '🔬', enabled: 1 })
+
+      // ② 题目：增（难度归 1/非法值）→ 校验拦截（空题干/无分类/分类不存在）→ 列表筛选 → 改题 → 删题
+      const qAdd = await apiPost('/quiz/save', { categoryId: catId, question: 'E2E题干一：1+1=?', answer: '2', difficulty: 2 })
+      expect(qAdd.code).toBe(200)
+      const q1 = qAdd.data.id
+      expect(q1).toBeTruthy()
+      // 校验拦截
+      expect((await apiPost('/quiz/save', { categoryId: catId, question: '' })).code).not.toBe(200)
+      expect((await apiPost('/quiz/save', { question: '无分类' })).code).not.toBe(200)
+      expect((await apiPost('/quiz/save', { categoryId: 99999999, question: '分类不存在' })).code).not.toBe(200)
+      // 难度非 1~3 归 1
+      const qBad2 = await apiPost('/quiz/save', { categoryId: catId, question: 'E2E难度非法', answer: 'x', difficulty: 9 })
+      expect(qBad2.code).toBe(200)
+      const q2 = qBad2.data.id
+      // 列表：按分类查，含关键字/难度筛选；字段齐全
+      let lst = (await apiGet('/quiz/list?categoryId=' + catId)).data
+      expect(lst.total).toBe(2)
+      const rowAll = lst.rows.find(r => r.id === q1)
+      for (const k of ['id', 'categoryId', 'categoryName', 'categoryIcon', 'question', 'answer', 'difficulty', 'enabled', 'useCount', 'lastUsedAt']) {
+        expect(rowAll).toHaveProperty(k)
+      }
+      expect(rowAll.difficulty).toBe(2)
+      expect(lst.rows.find(r => r.id === q2).difficulty).toBe(1)
+      expect((await apiGet('/quiz/list?categoryId=' + catId + '&difficulty=2')).data.total).toBe(1)
+      expect((await apiGet('/quiz/list?kw=E2E难度非法')).data.total).toBe(1)
+      // 改题：题干/难度/分类不变量校验
+      expect((await apiPost('/quiz/save', { id: q2, categoryId: catId, question: 'E2E难度非法改', answer: 'y', difficulty: 3 })).code).toBe(200)
+      lst = (await apiGet('/quiz/list?kw=E2E难度非法改')).data
+      expect(lst.total).toBe(1)
+      expect(lst.rows[0].difficulty).toBe(3)
+      // 删题
+      expect((await request.delete(API + '/quiz/' + q2, { headers: authHeader() })).status()).toBe(200)
+      expect((await apiGet('/quiz/list?kw=E2E难度非法改')).data.total).toBe(0)
+      // 分类题目数联动
+      cats = (await apiGet('/quiz/categories')).data
+      expect(cats.find(c => c.id === catId).questionCount).toBe(1)
+
+      // ③ Excel 导入：分类自动建 + 难度空默认 1 + 空题干计 skipped（复用成绩导入的 XLSX 构造先例）
+      const aoa = [
+        ['分类', '题目', '答案', '难度'],
+        ['E2E导入分类', 'E2E导入题一', '答一', 2],
+        ['E2E导入分类', 'E2E导入题二', '答二', ''],
+        ['E2E导入分类', '', '无题干应跳过'],
+      ]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '题库')
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+      const imp = await request.post(API + '/quiz/import', {
+        headers: authHeader(),
+        multipart: { file: { name: 'e2e-quiz.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer } },
+      })
+      const impBody = await imp.json()
+      expect(impBody.code).toBe(200)
+      expect(impBody.data.added).toBe(2)
+      expect(impBody.data.skipped).toBe(1)
+      expect(impBody.data.categoriesCreated).toBe(1)
+      // 导入后的分类与难度
+      cats = (await apiGet('/quiz/categories')).data
+      const impCat = cats.find(c => c.name === 'E2E导入分类')
+      expect(impCat).toBeTruthy()
+      expect(impCat.questionCount).toBe(2)
+      lst = (await apiGet('/quiz/list?categoryId=' + impCat.id)).data
+      expect(lst.rows.find(r => r.question === 'E2E导入题一').difficulty).toBe(2)
+      expect(lst.rows.find(r => r.question === 'E2E导入题二').difficulty).toBe(1)
+
+      // ④ 抽题降权：从未用过优先 → 最久未用优先；两题确定性交替（间隔 1.1s 保证 DATETIME 秒级可区分）
+      const qA = await apiPost('/quiz/save', { categoryId: catId, question: 'E2E抽题甲', answer: 'A', difficulty: 1 })
+      const idA = qA.data.id
+      // draw#1：分类里只有「E2E题干一」和「E2E抽题甲」都未用过 → NULL 优先随机；先清空旧题保证确定性
+      expect((await request.delete(API + '/quiz/' + q1, { headers: authHeader() })).status()).toBe(200)
+      // draw#1：唯一未用过题 = 甲（T1，useCount 0→1）
+      let d1 = await apiPost('/quiz/draw', { categoryId: catId })
+      expect(d1.code).toBe(200)
+      expect(d1.data.question).toBe('E2E抽题甲')
+      await page.waitForTimeout(1100)   // 保证两次 draw 的 last_used_at 秒级不同
+      const qB = await apiPost('/quiz/save', { categoryId: catId, question: 'E2E抽题乙', answer: 'B', difficulty: 1 })
+      const idB = qB.data.id
+      // draw#2：乙从未用过（NULL 优先）→ 必返乙（T2）
+      let d2 = await apiPost('/quiz/draw', { categoryId: catId })
+      expect(d2.data.question).toBe('E2E抽题乙')
+      // draw#3：甲 T1 < 乙 T2 → 最久未用必返甲；draw#4：乙最旧必返乙（交替）
+      let d3 = await apiPost('/quiz/draw', { categoryId: catId })
+      expect(d3.data.question).toBe('E2E抽题甲')
+      let d4 = await apiPost('/quiz/draw', { categoryId: catId })
+      expect(d4.data.question).toBe('E2E抽题乙')
+      // useCount / lastUsedAt 联动（甲被抽 2 次）
+      lst = (await apiGet('/quiz/list?categoryId=' + catId)).data
+      const rowA = lst.rows.find(r => r.id === idA)
+      expect(rowA.useCount).toBe(2)
+      expect(rowA.lastUsedAt).toBeTruthy()
+      // 难度过滤：难度 2 无题 → null（不报错）
+      const dDiff = await apiPost('/quiz/draw', { categoryId: catId, difficulty: 2 })
+      expect(dDiff.code).toBe(200)
+      expect(dDiff.data).toBeNull()
+      // 停用分类抽题：返回 null
+      await apiPost('/quiz/category', { id: catId, name: 'E2E题库分类2', icon: '🔬', enabled: 0 })
+      const dOff = await apiPost('/quiz/draw', { categoryId: catId })
+      expect(dOff.code).toBe(200)
+      expect(dOff.data).toBeNull()
+      await apiPost('/quiz/category', { id: catId, name: 'E2E题库分类2', icon: '🔬', enabled: 1 })
+
+      // ⑤ 删非空分类应失败；清空题目后可删（顺带自清理「E2E题库分类2」）
+      const delBad = await apiPost('/quiz/category/delete/' + catId)
+      expect(delBad.code).not.toBe(200)
+      lst = (await apiGet('/quiz/list?categoryId=' + catId + '&size=200')).data
+      for (const r of lst.rows) {
+        expect((await request.delete(API + '/quiz/' + r.id, { headers: authHeader() })).status()).toBe(200)
+      }
+      expect((await apiPost('/quiz/category/delete/' + catId)).code).toBe(200)
+      cats = (await apiGet('/quiz/categories')).data
+      expect(cats.find(c => c.id === catId)).toBeFalsy()
+
+      // ⑥ /pet 题库管理弹窗走查：📚 题库按钮 → 弹窗结构（左分类卡 + 右题目表 + 难度徽章 + 底部提示）
+      await page.goto('/pet')
+      await expect(page.locator('.page-title', { hasText: '宠物园' })).toBeVisible()
+      await page.getByRole('button', { name: /题库/ }).click()
+      const quizDlg = page.locator('.el-dialog', { hasText: '题库管理' })
+      await expect(quizDlg).toBeVisible()
+      // 左栏：E2E导入分类卡片（含题数）
+      const catCard = quizDlg.locator('.cat-card', { hasText: 'E2E导入分类' })
+      await expect(catCard).toBeVisible()
+      await expect(catCard.locator('.cat-count')).toHaveText('2 题')
+      // 点分类卡 → 右栏表格出该分类题目 + 难度徽章
+      await catCard.click()
+      await expect(quizDlg.locator('.el-table__row', { hasText: 'E2E导入题一' })).toBeVisible()
+      await expect(quizDlg.locator('.el-table__row', { hasText: 'E2E导入题二' })).toBeVisible()
+      await expect(quizDlg.locator('.el-table__row', { hasText: 'E2E导入题一' }).locator('.diff-badge.d2')).toBeVisible()
+      await expect(quizDlg.locator('.el-table__row', { hasText: 'E2E导入题二' }).locator('.diff-badge.d1')).toBeVisible()
+      // 底部导入列格式提示
+      await expect(quizDlg.locator('.foot-hint')).toContainText('分类 | 题目 | 答案 | 难度')
+      await page.keyboard.press('Escape')
+
+      // ⑦ 自清理「E2E导入分类」（先删题再删空分类，与 afterAll 兜底同款）
+      const impCat2 = (await apiGet('/quiz/categories')).data.find(c => c.name === 'E2E导入分类')
+      lst = (await apiGet('/quiz/list?categoryId=' + impCat2.id + '&size=200')).data
+      for (const r of lst.rows) {
+        await request.delete(API + '/quiz/' + r.id, { headers: authHeader() })
+      }
+      expect((await apiPost('/quiz/category/delete/' + impCat2.id)).code).toBe(200)
     })
 
     // ============ 11g. 头像与班级设置 ============

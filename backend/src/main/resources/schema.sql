@@ -431,6 +431,32 @@ CREATE TABLE IF NOT EXISTS pet_exchange (
   KEY idx_pe_user (user_id)
 );
 
+-- 题库分类（per-user；语文背诵/英语单词/数学口算…，老师自建，供打怪兽/PK 抽题）
+CREATE TABLE IF NOT EXISTS quiz_category (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  name VARCHAR(32) NOT NULL,
+  icon VARCHAR(8),
+  enabled TINYINT DEFAULT 1,
+  sort INT DEFAULT 0,
+  KEY idx_qc_user (user_id)
+);
+
+-- 题库（per-user；answer 只给老师端，30 天内用过的抽题降权）
+CREATE TABLE IF NOT EXISTS quiz_bank (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  category_id BIGINT NOT NULL,
+  question VARCHAR(500) NOT NULL,
+  answer VARCHAR(500),
+  difficulty INT DEFAULT 1 COMMENT '1易 2中 3难',
+  enabled TINYINT DEFAULT 1,
+  use_count INT DEFAULT 0,
+  last_used_at DATETIME NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_qb_user_cat (user_id, category_id, enabled)
+);
+
 -- 全局设置（per-user，键值按账号隔离）
 CREATE TABLE IF NOT EXISTS setting (
   user_id BIGINT NOT NULL DEFAULT 1,

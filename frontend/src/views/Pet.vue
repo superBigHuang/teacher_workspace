@@ -9,6 +9,7 @@
         <el-radio-button value="level">🐉 等级榜</el-radio-button>
       </el-radio-group>
       <div class="spacer"></div>
+      <el-button round @click="quizDlg = true">📚 题库</el-button>
       <el-button round @click="api.openRules()">⚙ 评价项</el-button>
       <el-button round @click="api.openShop()">🛍 商店</el-button>
     </div>
@@ -68,10 +69,11 @@
       <div v-if="!wallRows.length" class="wall-empty">还没有宠物，去座次表领养吧～</div>
     </div>
 
-    <!-- 复用弹窗：详情 / 评价 / 评价项管理 / 小商店（组件从 Seat.vue 抽出共享） -->
+    <!-- 复用弹窗：详情 / 评价 / 评价项管理 / 小商店（组件从 Seat.vue 抽出共享） + 题库管理 -->
     <PetDetailDlg :api="api" />
     <RulesDlg :api="api" />
     <ShopDlg :api="api" />
+    <QuizDlg v-model="quizDlg" />
 
     <!-- 评价弹窗（单人/批量共用；Pet 页仅单人详情入口） -->
     <el-dialog v-model="api.evalDlg" title="🌟 给宠物评价" width="560px" align-center>
@@ -101,6 +103,7 @@ import { onRemoteCmd } from '../composables/useRemote'
 import PetDetailDlg from '../components/pet/PetDetailDlg.vue'
 import RulesDlg from '../components/pet/RulesDlg.vue'
 import ShopDlg from '../components/pet/ShopDlg.vue'
+import QuizDlg from '../components/quiz/QuizDlg.vue'
 
 /** 评价项分类（固定四个 tab） */
 const CATS = PET_CATS
@@ -109,6 +112,9 @@ const MAX_EXP = 280
 
 // 宠物操作复用座次表同一套逻辑（reactive 包装后模板访问 api.xxx 自动解包嵌套 ref）
 const api = reactive(usePets())
+
+// 题库管理弹窗（独立数据，不依赖 usePets）
+const quizDlg = ref(false)
 
 // ==================== 榜单数据（一次拉全，切 tab 前端复排不重发请求） ====================
 const board = ref([])        // GET /pet/board 全量行（含 weeklyScore/exp/level/hatched 等）
