@@ -24,7 +24,7 @@ export function setSkinCache(list) { skinCache = list || [] }
 
 // ---------- 全屏进化演出队列（模块级单例：SSE 遥控指令、座次表页、手机页共享同一队列状态） ----------
 const evolveQueue = ref([])     // 待演分幕
-const currentEvolve = ref(null) // 正在演的一幕（传给 EvolutionShow 组件）
+export const currentEvolve = ref(null) // 正在演的一幕（传给 EvolutionShow 组件）
 let evolveBusy = false
 let resolveScene = null
 
@@ -83,7 +83,7 @@ async function pumpEvolve() {
 }
 
 /** 一幕结束：pending 来源通知后端——破壳幕调 hatch-seen（置 hatched=1 并结算等级），进化幕调 evolve-seen 清标记 */
-async function onEvolveDone() {
+export async function onEvolveDone() {
   const scene = currentEvolve.value
   currentEvolve.value = null
   if (scene?.pending) {
@@ -135,6 +135,27 @@ export function petImgOf(p) {
   if (!p || p.petId === null) return skinImg(key, 'egg')
   if (p.hatched === 0) return skinImg(key, 'egg')
   return skinImg(key, (p && p.level) || 1)
+}
+
+/** 破壳所需累计成长值（与后端 PetService.HATCH_EXP 保持一致） */
+export const HATCH_EXP = 20
+/** 蛋孵化进度百分比：累计成长值 / HATCH_EXP（蛋期间加分照常累计，攒够即破壳） */
+export function hatchPct(p) {
+  return Math.max(0, Math.min(100, Math.round(((p.exp || 0) / HATCH_EXP) * 100)))
+}
+/** 本级经验进度百分比（模块级导出：抽出的宠物弹窗组件共用） */
+export function expPct(p) {
+  if (p.level >= 5) return 100
+  const span = p.expTarget - p.expStart
+  return Math.max(4, Math.min(100, Math.round(((p.exp - p.expStart) / span) * 100)))
+}
+/** 流水时间格式化（T → 空格，截到分钟） */
+export function fmtTime(t) {
+  return String(t || '').replace('T', ' ').slice(0, 16)
+}
+/** 流水来源的中文说明 */
+export function sourceText(s) {
+  return { AUTO_ATTENDANCE: '考勤联动', AUTO_HOMEWORK: '作业联动', AUTO_DISCIPLINE: '纪律联动', AUTO_SCORE: '成绩发奖', REMOTE: '手机遥控' }[s] || '评价'
 }
 
 /**
@@ -194,20 +215,6 @@ export function usePets(opts = {}) {
   /** 宠物图片：按皮肤映射，未领养显示蛋 */
   function petImg(p) { return petImgOf(p) }
 
-  /** 本级经验进度百分比 */
-  function expPct(p) {
-    if (p.level >= 5) return 100
-    const span = p.expTarget - p.expStart
-    return Math.max(4, Math.min(100, Math.round(((p.exp - p.expStart) / span) * 100)))
-  }
-
-  /** 破壳所需累计成长值（与后端 PetService.HATCH_EXP 保持一致） */
-  const HATCH_EXP = 20
-  /** 蛋孵化进度百分比：累计成长值 / HATCH_EXP（蛋期间加分照常累计，攒够即破壳） */
-  function hatchPct(p) {
-    return Math.max(0, Math.min(100, Math.round(((p.exp || 0) / HATCH_EXP) * 100)))
-  }
-
   function floatsOf(sid) {
     return floats.value.filter(f => f.sid === sid)
   }
@@ -241,14 +248,6 @@ export function usePets(opts = {}) {
       setTimeout(() => { if (popKind.value.get(sid) === kind) popKind.value.delete(sid) }, good ? 430 : 330)
     }
     setTimeout(() => { floats.value = floats.value.filter(f => f.id !== id) }, 1500)
-  }
-
-  function fmtTime(t) {
-    return String(t || '').replace('T', ' ').slice(0, 16)
-  }
-
-  function sourceText(s) {
-    return { AUTO_ATTENDANCE: '考勤联动', AUTO_HOMEWORK: '作业联动', AUTO_DISCIPLINE: '纪律联动', AUTO_SCORE: '成绩发奖', REMOTE: '手机遥控' }[s] || '评价'
   }
 
   // ---------- 数据加载 ----------

@@ -1,15 +1,12 @@
 <template>
   <div>
     <div class="page-toolbar">
-      <h2 class="page-title">🪑 座次表 · 🐾 宠物园</h2>
+      <h2 class="page-title">🪑 座次表</h2>
       <el-button round @click="seatCfgDlg = true">⚙ 座位设置</el-button>
       <el-button round @click="printDlg = true">🖨 打印</el-button>
       <div class="spacer"></div>
       <el-button type="primary" :icon="Refresh" @click="randomSeat">🔀 随机排座</el-button>
       <el-button type="danger" plain :icon="Delete" @click="clearSeat">清空座次</el-button>
-      <el-button round @click="openRanking">🏆 荣誉榜</el-button>
-      <el-button round @click="openShop">🛍 小商店</el-button>
-      <el-button round @click="openRules">⚙ 评价项</el-button>
       <el-button round :type="batchMode ? 'success' : 'warning'" @click="toggleBatch">
         {{ batchMode ? `✅ 完成批量（已选 ${selected.size}）` : '📝 批量评价' }}
       </el-button>
@@ -224,57 +221,8 @@
       </template>
     </el-dialog>
 
-    <!-- 宠物详情弹窗（蛋态：显示蛋与孵化提示，隐藏等级/进度，加分照常） -->
-    <el-dialog v-model="detailDlg"
-      :title="detailStudent?.hatched === 0 ? `🥚 ${detailStudent?.petName || '神秘蛋'}（孵化中）` : `🐉 ${detailStudent?.petName || '宠物详情'}`"
-      width="460px" align-center>
-      <div v-if="detailStudent" class="detail-body">
-        <div class="detail-head">
-          <img class="detail-img" :class="{ egg: detailStudent.hatched === 0 }" :src="petImg(detailStudent)" alt="宠物">
-          <div class="detail-info">
-            <div class="detail-name">{{ detailStudent.petName }}
-              <span v-if="detailStudent.hatched === 0" class="lv-badge big egg-badge">🥚 孵化中</span>
-              <span v-else class="lv-badge big">Lv.{{ detailStudent.level }}</span>
-            </div>
-            <!-- 蛋态：孵化进度提示代替等级/徽章（破壳后按累计成长值一次性结算） -->
-            <div v-if="detailStudent.hatched === 0" class="detail-line egg-tip">
-              🥚 蛋蛋正在吸收能量，攒够 <b>{{ HATCH_EXP }}</b> 成长值就破壳出生！<br>当前 {{ Math.min(detailStudent.exp || 0, HATCH_EXP) }} / {{ HATCH_EXP }}，表扬加分照常累计哦～
-            </div>
-            <template v-else>
-              <div class="detail-line">🎓 毕业徽章：<b>{{ detailStudent.graduatedCount || 0 }}</b> 枚
-                <span v-for="n in detailStudent.graduatedCount" :key="n" class="badge-medal">🎓</span>
-              </div>
-              <div class="detail-line">⭐ 累计成长值：<b>{{ detailStudent.exp }}</b>
-                <span v-if="detailStudent.level < 5">（距 Lv.{{ detailStudent.level + 1 }} 还需 {{ detailStudent.expTarget - detailStudent.exp }}）</span>
-                <span v-else>已满级</span>
-              </div>
-            </template>
-          </div>
-        </div>
-
-        <!-- 进度条：蛋态显示孵化进度（exp/HATCH_EXP），破壳后显示本级成长进度（座位格上不展示，统一收进详情） -->
-        <div class="detail-exp">
-          <div class="detail-exp-fill" :style="{ width: (detailStudent.hatched === 0 ? hatchPct(detailStudent) : expPct(detailStudent)) + '%' }"></div>
-        </div>
-
-        <div class="log-title">📖 最近成长流水</div>
-        <div class="log-list">
-          <div v-for="l in detailLogs" :key="l.id" class="log-row">
-            <span class="log-score" :class="l.score > 0 ? 'good' : 'bad'">
-              {{ l.score > 0 ? '+' : '' }}{{ l.score }}
-            </span>
-            <span class="log-name">{{ l.remark || l.ruleName || sourceText(l.source) }}</span>
-            <span class="log-time">{{ fmtTime(l.createdAt) }}</span>
-            <el-button size="small" text type="danger" @click="revokeLog(l.id)">撤回</el-button>
-          </div>
-          <div v-if="!detailLogs.length" class="log-empty">还没有成长记录，快给Ta第一次评价吧～</div>
-        </div>
-      </div>
-      <template #footer>
-        <el-button v-if="detailStudent?.level >= 5" type="warning" round @click="doGraduate">🎓 毕业</el-button>
-        <el-button type="primary" round @click="openEvalSingle(detailStudent)">🌟 评价加分</el-button>
-      </template>
-    </el-dialog>
+    <!-- 宠物详情弹窗（从 Seat 抽到 components/pet/，与宠物园 /pet 页共用） -->
+    <PetDetailDlg :api="petsApiView" />
 
     <!-- 评价弹窗（单人/批量共用） -->
     <el-dialog v-model="evalDlg" :title="evalBatch ? `📝 批量评价（${selected.size} 人）` : '🌟 给宠物评价'"
@@ -309,107 +257,9 @@
       </div>
     </el-dialog>
 
-    <!-- 荣誉榜弹窗 -->
-    <el-dialog v-model="rankDlg" title="🏆 宠物荣誉榜" width="520px" align-center>
-      <div class="rank-list">
-        <div v-for="r in ranking" :key="r.studentId" class="rank-row"
-          :class="{ top3: r.rank && r.rank <= 3, unranked: !r.rank }">
-          <span class="rank-medal">
-            {{ r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : (r.rank ? r.rank : '—') }}
-          </span>
-          <img class="rank-img" :src="petImg(r)" alt="">
-          <span class="rank-pet">{{ r.petName }}</span>
-          <span class="rank-stu">{{ r.name }}</span>
-          <span class="rank-lv">Lv.{{ r.level }}</span>
-          <span class="rank-badges">🎓{{ r.badges }}</span>
-          <span class="rank-total">⭐{{ r.total }}</span>
-        </div>
-      </div>
-    </el-dialog>
-
-    <!-- 小商店弹窗 -->
-    <el-dialog v-model="shopDlg" title="🛍 宠物小商店" width="600px" align-center>
-      <el-tabs v-model="shopTab">
-        <!-- 兑换 -->
-        <el-tab-pane label="🎁 兑换礼物" name="exchange">
-          <div class="shop-stu-pick">
-            为谁兑换：
-            <el-select v-model="exchangeSid" placeholder="选择学生" style="width: 180px">
-              <el-option v-for="p in pets.filter(x => x.petId)" :key="p.studentId"
-                :label="`${p.name}（${p.petName} · ⭐${p.exp}）`" :value="p.studentId" />
-            </el-select>
-          </div>
-          <div class="shop-grid">
-            <div v-for="it in shopItems" :key="it.id" class="shop-card">
-              <div class="shop-icon">{{ it.icon || '🎁' }}</div>
-              <div class="shop-name">{{ it.name }}</div>
-              <div class="shop-price">⭐{{ it.price }}</div>
-              <div class="shop-stock">{{ it.stock < 0 ? '库存充足' : `剩 ${it.stock} 件` }}</div>
-              <el-button size="small" round type="primary" :disabled="it.stock === 0" @click="doExchange(it)">
-                兑换
-              </el-button>
-            </div>
-            <div v-if="!shopItems.length" class="cat-empty">还没有商品，去「📦 商品与记录」添加吧</div>
-          </div>
-        </el-tab-pane>
-        <!-- 商品管理 + 兑换记录 -->
-        <el-tab-pane label="📦 商品与记录" name="manage">
-          <div class="manage-title">商品管理</div>
-          <div class="item-form">
-            <el-input v-model="itemForm.icon" maxlength="2" style="width: 64px" placeholder="🎁" />
-            <el-input v-model="itemForm.name" maxlength="20" style="width: 150px" placeholder="商品名称" />
-            <el-input-number v-model="itemForm.price" :min="1" :max="280" controls-position="right" style="width: 110px" />
-            <el-input-number v-model="itemForm.stock" :min="-1" controls-position="right" style="width: 120px" />
-            <el-button type="primary" round @click="saveItem">上架</el-button>
-          </div>
-          <div class="form-hint">价格=成长值；库存填 -1 表示不限量</div>
-          <div v-for="it in shopItems" :key="'m'+it.id" class="item-row">
-            <span class="shop-icon-sm">{{ it.icon || '🎁' }}</span>
-            <span class="item-name">{{ it.name }}</span>
-            <span class="item-meta">⭐{{ it.price }} · {{ it.stock < 0 ? '不限量' : `库存 ${it.stock}` }}</span>
-            <el-button size="small" text type="danger" @click="deleteItem(it.id)">下架</el-button>
-          </div>
-
-          <div class="manage-title" style="margin-top: 16px">兑换记录</div>
-          <div v-for="e in exchanges" :key="e.id" class="ex-row">
-            <span>{{ e.itemIcon || '🎁' }} {{ e.itemName }}</span>
-            <span class="ex-stu">{{ e.studentName }}</span>
-            <span class="ex-cost">-⭐{{ e.cost }}</span>
-            <span class="ex-time">{{ fmtTime(e.createdAt) }}</span>
-            <el-tag v-if="e.status === '待兑现'" type="warning" size="small">待兑现</el-tag>
-            <el-tag v-else type="success" size="small">已兑现</el-tag>
-            <el-button v-if="e.status === '待兑现'" size="small" round type="success"
-              @click="fulfill(e.id)">兑现</el-button>
-          </div>
-          <div v-if="!exchanges.length" class="cat-empty">还没有兑换记录</div>
-        </el-tab-pane>
-      </el-tabs>
-    </el-dialog>
-
-    <!-- 评价项管理弹窗 -->
-    <el-dialog v-model="rulesDlg" title="⚙ 评价项管理" width="580px" align-center>
-      <el-tabs v-model="ruleCat">
-        <el-tab-pane v-for="c in CATS" :key="c" :label="c" :name="c">
-          <div class="item-form">
-            <el-input v-model="ruleForm.icon" maxlength="2" style="width: 64px" placeholder="✨" />
-            <el-input v-model="ruleForm.name" maxlength="20" style="width: 160px" placeholder="评价项名称" />
-            <el-input-number v-model="ruleForm.score" :min="-10" :max="10" controls-position="right" style="width: 120px" />
-            <el-button type="primary" round @click="saveRule(c)">添加</el-button>
-          </div>
-          <div class="form-hint">正分=奖励成长值，负分=扣减（扣分不会降级）</div>
-          <div v-for="r in rulesOfCat(c)" :key="r.id" class="item-row">
-            <span class="shop-icon-sm">{{ r.icon || '✨' }}</span>
-            <span class="item-name">{{ r.name }}</span>
-            <span class="item-meta" :class="r.score > 0 ? 'good' : 'bad'">
-              {{ r.score > 0 ? '+' : '' }}{{ r.score }}
-            </span>
-            <el-switch :model-value="r.enabled === 1 || r.enabled === true" size="small" @change="v => toggleRule(r, v)" />
-            <el-button size="small" text type="danger" @click="deleteRule(r.id)">删除</el-button>
-          </div>
-          <div v-if="!rulesOfCat(c).length" class="cat-empty">该分类暂无评价项</div>
-        </el-tab-pane>
-      </el-tabs>
-    </el-dialog>
+    <!-- 荣誉榜/商店/评价项入口已搬至宠物园 /pet 页；弹窗组件抽到 components/pet/ 共用 -->
+    <RulesDlg :api="petsApiView" />
+    <ShopDlg :api="petsApiView" />
 
     <!-- ⚙ 座位设置：布局（行列）/ 过道（标签与下拉配对）/ 显示（简易模式+字段+名字位置），改完即时保存 -->
     <el-dialog v-model="seatCfgDlg" title="⚙ 座位设置" width="520px" align-center>
@@ -542,8 +392,7 @@
 
     <!-- 自创宠物皮肤弹窗 -->
     <SkinMakerDlg v-model="skinMakerDlg" @saved="onSkinSaved" />
-    <!-- 全屏进化演出（升级时 6 秒分镜，点击跳过） -->
-    <EvolutionShow :scene="currentEvolve" @done="onEvolveDone" />
+    <!-- 全屏进化演出已挪至 MainLayout 全局挂载（任何页均可播，含宠物园 /pet 页） -->
   </div>
 </template>
 
@@ -554,9 +403,11 @@ import { Refresh, Delete } from '@element-plus/icons-vue'
 import http from '../api/http'
 import { usePets, PET_CATS } from '../composables/usePets'
 import { onRemoteCmd } from '../composables/useRemote'
-import EvolutionShow from '../components/EvolutionShow.vue'
 import SkinMakerDlg from '../components/SkinMakerDlg.vue'
 import BadgeIcon from '../components/BadgeIcon.vue'
+import PetDetailDlg from '../components/pet/PetDetailDlg.vue'
+import RulesDlg from '../components/pet/RulesDlg.vue'
+import ShopDlg from '../components/pet/ShopDlg.vue'
 
 /** 评价项分类（固定四个 tab） */
 const CATS = PET_CATS
@@ -731,21 +582,21 @@ async function onDrop(e, target) {
   await loadGrid()
 }
 
-// ==================== 宠物园（逻辑复用 usePets） ====================
+// ==================== 宠物园（逻辑复用 usePets；弹窗组件经 petsApi 共享同一实例） ====================
+// 宠物园独立页 /pet 已上线：荣誉榜/商店/评价项入口搬至该页；座次表保留座位交互与评价/领养/毕业
+const petsApi = usePets()
+// reactive 视图供弹窗组件使用：props.api 模板访问自动解包嵌套 ref（解构出的 ref 依旧同源同步）
+const petsApiView = reactive(petsApi)
 const {
   pets, skins, selected, batchMode, floats, popKind, eggWiggle,
-  adoptDlg, detailDlg, evalDlg, graduateDlg, rankDlg, shopDlg, rulesDlg, skinMakerDlg,
-  adoptName, adoptSkin, detailStudent, detailLogs, evalBatch, evalCat,
-  gradStudent, ranking, shopTab, shopItems, exchanges, exchangeSid, itemForm, ruleCat, ruleForm,
-  currentEvolve, onEvolveDone,
-  petImg, skinImg, expPct, hatchPct, HATCH_EXP, floatsOf, fmtTime, sourceText, rulesOfCat, FX_THEMES,
+  adoptDlg, evalDlg, graduateDlg, skinMakerDlg,
+  adoptName, adoptSkin, evalBatch, evalCat, gradStudent,
+  petImg, skinImg, expPct, hatchPct, HATCH_EXP, floatsOf, rulesOfCat, FX_THEMES,
   onCardClick, togglePick, toggleBatch,
-  openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt, revokeLog,
+  openAdopt, openSkinMaker, onSkinSaved, deleteSkin, doAdopt,
   openEvalSingle, openEvalBatch, applyRule, doGraduate,
-  openRanking, openShop, doExchange, fulfill, saveItem, deleteItem,
-  openRules, saveRule, toggleRule, deleteRule,
   loadPets
-} = usePets()
+} = petsApi
 
 // ==================== 批量评价：按列全选（列头勾选框） ====================
 /** 某逻辑列已排座的学生 id 列表（未排座空位不计） */
@@ -1096,25 +947,6 @@ async function onSeatUp(e) {
 .adopt-body { text-align: center; padding: 6px 10px; }
 .adopt-tip { color: #a07a5c; font-size: 14px; line-height: 1.7; margin: 8px 0 14px; }
 
-/* 详情弹窗 */
-.detail-head { display: flex; gap: 16px; align-items: center; }
-.detail-img { width: 120px; height: 120px; object-fit: contain; animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 6px 10px rgba(220,160,110,.35)); }
-.detail-exp { height: 12px; border-radius: 8px; background: #ffe2c8; margin: 14px 4px 4px; overflow: hidden; }
-.detail-exp-fill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, #ffd98a, #ff9f5a); transition: width .4s; }
-.detail-info { flex: 1; }
-.detail-name { font-size: 19px; font-weight: 800; color: #8a5a34; margin-bottom: 8px; }
-.detail-line { font-size: 13px; color: #9a7a5c; margin: 5px 0; }
-.badge-medal { margin-left: 3px; }
-.log-title { font-weight: 800; color: #8a5a34; margin: 16px 0 8px; }
-.log-list { max-height: 220px; overflow-y: auto; }
-.log-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 12px; background: #fff7ee; margin-bottom: 6px; font-size: 13px; }
-.log-score { font-weight: 900; width: 38px; }
-.log-score.good { color: #4caf7d; }
-.log-score.bad { color: #ef6f6f; }
-.log-name { flex: 1; color: #6b5b73; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-time { color: #c0a898; font-size: 12px; }
-.log-empty { text-align: center; color: #c0a898; padding: 18px 0; font-size: 13px; }
-
 /* 评价项卡片 */
 .rule-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .rule-card {
@@ -1146,49 +978,6 @@ async function onSeatUp(e) {
   background: linear-gradient(135deg, #f2a93a, #e07b2a); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .graduate-text { position: relative; color: #8a6a44; line-height: 1.9; font-size: 14px; }
-
-/* 荣誉榜 */
-.rank-list { max-height: 480px; overflow-y: auto; padding-right: 4px; }
-.rank-row {
-  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 14px;
-  margin-bottom: 7px; background: #fff7ee; font-size: 14px;
-}
-.rank-row.top3 { background: linear-gradient(135deg, #fff4d6, #ffe8c2); border: 2px solid #ffd98a; font-weight: 800; }
-.rank-row.unranked { opacity: .55; }
-.rank-medal { width: 44px; text-align: center; font-size: 17px; font-weight: 900; color: #b08a66; }
-.rank-img { width: 38px; height: 38px; object-fit: contain; }
-.rank-pet { font-weight: 800; color: #8a5a34; width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rank-stu { color: #9a7a5c; flex: 1; }
-.rank-lv { font-size: 12px; color: #ff7f32; font-weight: 800; }
-.rank-badges { font-size: 13px; }
-.rank-total { font-weight: 800; color: #d9a52e; width: 64px; text-align: right; }
-
-/* 小商店 */
-.shop-stu-pick { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-weight: 700; color: #8a5a34; }
-.shop-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.shop-card {
-  border: 2px solid #fff; border-radius: 16px; padding: 12px 8px; text-align: center;
-  background: linear-gradient(150deg, #fff7ec, #ffeeda); display: flex; flex-direction: column; align-items: center; gap: 3px;
-}
-.shop-icon { font-size: 34px; }
-.shop-name { font-weight: 800; color: #8a5a34; font-size: 14px; }
-.shop-price { font-weight: 900; color: #ff7f32; }
-.shop-stock { font-size: 12px; color: #b09888; margin-bottom: 4px; }
-.manage-title { font-weight: 800; color: #8a5a34; margin: 6px 0 8px; }
-.item-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
-.form-hint { font-size: 12px; color: #c0a898; margin-bottom: 10px; }
-.item-row, .ex-row {
-  display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 12px;
-  background: #fff7ee; margin-bottom: 6px; font-size: 13px;
-}
-.shop-icon-sm { font-size: 20px; }
-.item-name { font-weight: 700; color: #6b5b73; flex: 1; }
-.item-meta { color: #a08a70; font-weight: 700; }
-.item-meta.good { color: #4caf7d; }
-.item-meta.bad { color: #ef6f6f; }
-.ex-stu { font-weight: 800; color: #8a5a34; }
-.ex-cost { color: #ef6f6f; font-weight: 800; }
-.ex-time { color: #c0a898; font-size: 12px; flex: 1; }
 
 /* 动画 */
 @keyframes pet-breathe {

@@ -18,7 +18,8 @@
       <nav>
         <router-link v-for="item in navs" :key="item.path" :to="item.path"
           class="nav-item" :style="{ '--nav': item.color, '--navbg': item.bg }">
-          <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+          <span v-if="item.emoji" class="nav-emoji">{{ item.emoji }}</span>
+          <el-icon v-else class="nav-icon"><component :is="item.icon" /></el-icon>
           <span v-show="!collapsed" class="nav-text">{{ item.title }}</span>
         </router-link>
       </nav>
@@ -57,6 +58,9 @@
                 :class="{ active: avatar === a }" @click="pickAvatar(a)">{{ a }}</button>
       </div>
     </el-dialog>
+
+    <!-- 全屏进化演出：全局挂载一处（原挂 Seat.vue，现任何页均可播，含宠物园 /pet 大屏） -->
+    <EvolutionShow :scene="currentEvolve" @done="onEvolveDone" />
   </div>
 </template>
 
@@ -67,7 +71,8 @@ import { ElMessage } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import http from '../api/http'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
-import { playHeld } from '../composables/usePets'
+import { playHeld, currentEvolve, onEvolveDone } from '../composables/usePets'
+import EvolutionShow from '../components/EvolutionShow.vue'
 
 /** 可选头像 emoji（动物/笑脸/职业，马卡龙风格） */
 const AVATARS = [
@@ -104,7 +109,8 @@ onUnmounted(() => { offRemote?.(); stopRemote() })
 /**
  * 遥控指令处理（全局级）：
  * - navigate：PC 切到指定页面
- * - evolve.playAll / evolve.play：先切到座次表页（演出组件挂在该页），等渲染后播放待播进化
+ * - evolve.playAll / evolve.play：播放待播进化（演出组件全局挂载在本布局，任何页直接播；
+ *   座位/宠物墙卡片 data-sid 可定位起飞点，找不到则从屏幕中央起飞）
  * - spotlight：切到座次表并高亮目标学生座位 3 秒（.remote-spot 样式在 Seat.vue 定义）
  */
 function handleRemoteCmd(action, payload) {
@@ -112,19 +118,16 @@ function handleRemoteCmd(action, payload) {
     router.push(payload.path)
     return
   }
-  if (action === 'evolve.playAll' || action === 'evolve.play' || action === 'spotlight') {
-    const onSeat = router.currentRoute.value.path === '/seat'
+  if (action === 'evolve.playAll') { playHeld(); return }
+  if (action === 'evolve.play') { playHeld(payload.studentId); return }
+  if (action === 'spotlight') {
     const run = () => {
-      if (action === 'evolve.playAll') playHeld()
-      else if (action === 'evolve.play') playHeld(payload.studentId)
-      else if (action === 'spotlight') {
-        const el = document.querySelector(`[data-sid="${payload.studentId}"]`)
-        if (!el) return
-        el.classList.add('remote-spot')
-        setTimeout(() => el.classList.remove('remote-spot'), 3000)
-      }
+      const el = document.querySelector(`[data-sid="${payload.studentId}"]`)
+      if (!el) return
+      el.classList.add('remote-spot')
+      setTimeout(() => el.classList.remove('remote-spot'), 3000)
     }
-    if (onSeat) run()
+    if (router.currentRoute.value.path === '/seat') run()
     else { router.push('/seat'); setTimeout(run, 600) }
   }
 }
@@ -143,6 +146,7 @@ async function pickAvatar(a) {
 const navs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
+  { path: '/pet', title: '宠物园', emoji: '🐾', color: '#e08a4b', bg: '#fdeede' },
   { path: '/duty', title: '值日表·班委', icon: 'Brush', color: '#52b788', bg: '#e4f6ec' },
   { path: '/score', title: '成绩分析', icon: 'TrendCharts', color: '#9b6dd6', bg: '#f0e8fb' },
   { path: '/comment', title: '期末评语', icon: 'EditPen', color: '#e06aa8', bg: '#fde7f3' },
@@ -193,6 +197,8 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
   transition: all .15s;
 }
 .nav-item .nav-icon { font-size: 18px; color: var(--nav); }
+/* emoji 菜单图标（宠物园 🐾 等）：与 nav-icon 同宽对齐 */
+.nav-item .nav-emoji { font-size: 18px; line-height: 1; }
 .nav-item:hover { background: var(--navbg); }
 .nav-item.router-link-active {
   background: var(--navbg); color: var(--nav);

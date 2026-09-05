@@ -1415,8 +1415,10 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect(r.code).toBe(200)
       exs = (await apiGet('/pet/exchanges')).data
       expect(exs.find(e => e.id === ex.id).status).toBe('已兑现')
-      // UI：小商店弹窗展示商品
-      await page.getByRole('button', { name: /小商店/ }).click()
+      // UI：小商店弹窗展示商品（入口已从座次表搬到宠物园 /pet 页顶部）
+      await page.goto('/pet')
+      await expect(page.locator('.wall-grid')).toBeVisible()
+      await page.getByRole('button', { name: /商店/ }).click()
       await expect(page.locator('.shop-card', { hasText: 'E2E橡皮擦' })).toBeVisible()
       await page.keyboard.press('Escape')
 
@@ -1580,6 +1582,103 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const p2 = (await apiGet('/pet/pets')).data.pets.find(p => p.studentId === testStudentId2)
       expect(p2.skinKey).toBe(skinKey)
       expect(p2.hatched).toBe(0)
+    })
+
+    // ============ 11i. 宠物园独立页 /pet ============
+    await test.step('宠物园 /pet：board 榜单接口与排序；领奖台前三；宠物墙筛选与详情弹窗；tab 切换不发请求；座次表瘦身', async () => {
+      const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
+      const apiGet = (url) => j(request.get.bind(request), API + url)
+      const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
+
+      // ① 再建两名临时生（领养+dev force 破壳+加分，凑足周榜数据；afterAll 按 E2E 关键词级联清理）
+      const boardSids = []
+      for (const [no, name] of [['995', 'E2E周榜甲'], ['994', 'E2E周榜乙']]) {
+        const add = await apiPost('/roster/student', { stuNo: no, name, gender: '男' })
+        expect(add.code).toBe(200)
+        boardSids.push(add.data)
+        await apiPost('/pet/adopt', { studentId: add.data, petKey: 'candy', petName: 'E2E糖糖' + no })
+        const h = await apiPost('/pet/hatch-seen', { studentId: add.data, force: true })
+        expect(h.data.changed).toBe(true)
+      }
+      // 周榜得分：甲 2×(+5)=10、乙 1×(+5)=5（测试生 11f/11h 已累计远超 10 分，居榜首）
+      const rules = (await apiGet('/pet/rules')).data
+      const rule5 = rules.find(x => x.score === 5)
+      expect(rule5).toBeTruthy()
+      for (let i = 0; i < 2; i++) await apiPost('/pet/evaluate', { studentId: boardSids[0], ruleId: rule5.id })
+      await apiPost('/pet/evaluate', { studentId: boardSids[1], ruleId: rule5.id })
+
+      // ② board API：weekly 返回全量字段，测试生得分与排序正确（测试生 > 甲10 > 乙5）
+      const wb = (await apiGet('/pet/board?type=weekly')).data
+      expect(Array.isArray(wb)).toBeTruthy()
+      const rowA = wb.find(r => r.studentId === boardSids[0])
+      const rowB = wb.find(r => r.studentId === boardSids[1])
+      for (const k of ['studentId', 'name', 'weeklyScore', 'exp', 'level', 'hatched', 'graduatedCount', 'isLeader', 'petKey', 'petName']) {
+        expect(rowA).toHaveProperty(k)
+      }
+      expect(rowA.weeklyScore).toBe(10)
+      expect(rowB.weeklyScore).toBe(5)
+      const idxT = wb.findIndex(r => r.studentId === testStudentId)
+      expect(idxT).toBeGreaterThanOrEqual(0)
+      expect(wb[idxT].weeklyScore).toBeGreaterThanOrEqual(10)
+      expect(wb.indexOf(rowA)).toBeLessThan(wb.indexOf(rowB))
+
+      // ③ /pet 页 UI：标题 + 侧边栏菜单 + 领奖台三席 + 宠物墙测试生卡
+      await page.goto('/pet')
+      await expect(page.locator('.page-title', { hasText: '宠物园' })).toBeVisible()
+      await expect(nav(page, '宠物园')).toBeVisible()
+      await expect(page.locator('.podium-card')).toHaveCount(3)
+      // 领奖台 DOM 顺序为 🥈🥇🥉（视觉台位左中右）：金位（第2个）得分应 ≥ 银位与铜位
+      await page.waitForTimeout(800)   // 等 podiumIn 入屏动画与数据渲染
+      const scores = await page.locator('.podium-score').allTextContents()
+      const nums = scores.map(s => parseInt(s.replace(/\D/g, ''), 10)).filter(n => !Number.isNaN(n))
+      expect(nums.length).toBeGreaterThanOrEqual(2)
+      expect(nums[1]).toBeGreaterThanOrEqual(nums[0])
+      if (nums.length >= 3) expect(nums[1]).toBeGreaterThanOrEqual(nums[2])
+      await expect(page.locator('.wall-card', { hasText: 'E2E周榜甲' })).toBeVisible()
+      await expect(page.locator('.wall-card', { hasText: 'E2E周榜乙' })).toBeVisible()
+      await expect(page.locator('.wall-card', { hasText: 'E2E皮肤生' })).toBeVisible()
+
+      // 点击宠物墙卡片：弹宠物详情（复用抽出的 PetDetailDlg 组件）
+      await page.locator('.wall-card', { hasText: 'E2E周榜甲' }).click()
+      const petDetail = page.locator('.el-dialog', { hasText: 'E2E糖糖995' })
+      await expect(petDetail).toBeVisible({ timeout: 5000 })
+      await page.keyboard.press('Escape')
+      await expect(petDetail).toBeHidden({ timeout: 5000 })
+
+      // ④ 筛选 chip：孵化中 → 只显示蛋卡（E2E皮肤生=蛋 在；E2E周榜甲=已破壳 不在）
+      await page.locator('.wall-head .el-radio-button', { hasText: '孵化中' }).click()
+      await expect(page.locator('.wall-card', { hasText: 'E2E皮肤生' })).toBeVisible()
+      await expect(page.locator('.wall-card', { hasText: 'E2E周榜甲' })).toHaveCount(0)
+      // 本周进步：甲乙与测试生在、纯蛋（无加分）不在
+      await page.locator('.wall-head .el-radio-button', { hasText: '本周进步' }).click()
+      await expect(page.locator('.wall-card', { hasText: 'E2E周榜甲' })).toBeVisible()
+      await expect(page.locator('.wall-card', { hasText: 'E2E皮肤生' })).toHaveCount(0)
+      await page.locator('.wall-head .el-radio-button', { hasText: '全部' }).click()
+
+      // ⑤ tab 切换不发请求（route 拦截计数）；总榜/等级榜下领奖台隐藏
+      let boardCalls = 0
+      await page.route('**/api/pet/board*', route => { boardCalls++; route.continue() })
+      await page.locator('.page-toolbar .el-radio-button', { hasText: '总榜' }).click()
+      await expect(page.locator('.podium-area')).toBeHidden()
+      await page.locator('.page-toolbar .el-radio-button', { hasText: '等级榜' }).click()
+      await page.locator('.page-toolbar .el-radio-button', { hasText: '本周榜' }).click()
+      await expect(page.locator('.podium-area')).toBeVisible()
+      await page.waitForTimeout(600)
+      expect(boardCalls).toBe(0)   // 数据已在前端，切 tab 只复排不重发
+      await page.unroute('**/api/pet/board*')
+
+      // ⑥ 座次表瘦身：荣誉榜/小商店/评价项三入口不存在，座位棋盘仍在
+      await page.goto('/seat')
+      await expect(page.locator('.page-title', { hasText: '座次表' })).toBeVisible()
+      await expect(page.getByRole('button', { name: /荣誉榜/ })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: /小商店/ })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: /评价项/ })).toHaveCount(0)
+      await expect(page.locator('.board-grid .seat').first()).toBeVisible()
+
+      // ⑦ 自清理临时生（宠物/流水级联），保证步骤 13 花名册统计回到 40 人
+      for (const sid of boardSids) {
+        await request.delete(API + '/roster/student/' + sid, { headers: authHeader() })
+      }
     })
 
     // ============ 11g. 头像与班级设置 ============
@@ -1964,4 +2063,5 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       await expect(targetCol.locator('.group-member').first()).toBeVisible()
     })
   })
+
 })

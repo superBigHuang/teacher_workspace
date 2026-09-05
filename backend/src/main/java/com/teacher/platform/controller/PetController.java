@@ -233,6 +233,54 @@ public class PetController extends BaseController {
         return Result.ok(list);
     }
 
+    /**
+     * 宠物园榜单（/pet 独立页）：一次查全班已领养学生的全部榜单字段（含本周得分），Java 按 type 排序。
+     * 周榜口径只读 pet_log 正分流水（score>0 且本周一 00:00 起），严禁读 pet.exp——商店兑换扣 exp
+     * 不写 pet_log，读 exp 会造成口径错乱。排序：weekly=本周得分 DESC / total=累计总值(exp+毕业×280)
+     * DESC / level=等级 DESC；三者次级键均为 exp DESC、学号升序。前端只调一次，切 tab 前端复排。
+     */
+    @GetMapping("/board")
+    public Result<List<Map<String, Object>>> board(@RequestParam(defaultValue = "weekly") String type) {
+        Long uid = uid();
+        // WEEKDAY(CURDATE()) 周一=0…周日=6，DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) 即本周一 00:00（MySQL 5.7 兼容，无 CTE/窗口函数）
+        List<Map<String, Object>> list = jdbc.queryForList(
+                "SELECT s.id studentId, s.name, s.gender, s.stu_no stuNo, " +
+                        "p.pet_key petKey, p.pet_name petName, p.level, p.exp, p.hatched, " +
+                        "p.graduated_count graduatedCount, " +
+                        "IFNULL(w.weeklyScore, 0) weeklyScore, " +
+                        "(SELECT COUNT(*) FROM committee c WHERE c.user_id=s.user_id AND c.student_id=s.id AND c.role='组长') isLeader " +
+                        "FROM student s " +
+                        "JOIN pet p ON p.student_id=s.id AND p.user_id=s.user_id " +
+                        "LEFT JOIN (SELECT student_id, SUM(score) weeklyScore FROM pet_log " +
+                        "WHERE user_id=? AND score>0 " +
+                        "AND created_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) " +
+                        "GROUP BY student_id) w ON w.student_id=s.id " +
+                        "WHERE s.user_id=? AND s.class_id=?",
+                uid, uid, classId());
+        Comparator<Map<String, Object>> byStuNo = Comparator.comparing(r -> str(r.get("stuNo")));
+        Comparator<Map<String, Object>> byExpDesc = Comparator.comparingInt((Map<String, Object> r) ->
+                num(r.get("exp"))).reversed();
+        Comparator<Map<String, Object>> cmp;
+        switch (type) {
+            case "total" -> cmp = Comparator.comparingInt((Map<String, Object> r) ->
+                    num(r.get("exp")) + num(r.get("graduatedCount")) * PetService.MAX_EXP).reversed()
+                    .thenComparing(byExpDesc).thenComparing(byStuNo);
+            case "level" -> cmp = Comparator.comparingInt((Map<String, Object> r) ->
+                    num(r.get("level"))).reversed()
+                    .thenComparing(byExpDesc).thenComparing(byStuNo);
+            default -> cmp = Comparator.comparingInt((Map<String, Object> r) ->
+                    num(r.get("weeklyScore"))).reversed()
+                    .thenComparing(byExpDesc).thenComparing(byStuNo);
+        }
+        list.sort(cmp);
+        return Result.ok(list);
+    }
+
+    /** 取 Map 字段的 int 值（null 安全） */
+    private int num(Object o) {
+        return o == null ? 0 : ((Number) o).intValue();
+    }
+
     // ---------- 评价项 ----------
 
     @GetMapping("/rules")
