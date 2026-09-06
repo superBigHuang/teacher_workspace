@@ -4,6 +4,8 @@ const routes = [
   { path: '/login', name: 'login', component: () => import('../views/Login.vue') },
   // 手机遥控页：独立全屏不套侧边栏布局，自带登录卡（教室投影时手机遥控加减分/进化播放）
   { path: '/m', name: 'mobile', meta: { title: '宠物遥控' }, component: () => import('../views/Mobile.vue') },
+  // 拔萝卜早读大屏：独立全屏不套侧边栏布局，教室投影专用，免登录（大屏机常用账号已登或无操作员）
+  { path: '/radish', name: 'radish', meta: { title: '拔萝卜早读' }, component: () => import('../views/Radish.vue') },
   // 打怪兽大屏：独立全屏深色舞台（教室投影），正常鉴权（教室电脑为已登录的老师浏览器）
   { path: '/boss', name: 'boss', meta: { title: '打怪兽' }, component: () => import('../views/Boss.vue') },
   // 打印页：独立路由不套侧边栏布局，A4 定向，数据由生成页写入 sessionStorage
@@ -34,8 +36,8 @@ const router = createRouter({ history: createWebHistory(), routes })
 
 router.beforeEach((to) => {
   const token = localStorage.getItem('token')
-  // /m 手机页无 token 时显示自带登录卡，不跳转
-  if (to.path !== '/login' && to.path !== '/m' && !token) return '/login'
+  // /m 手机页无 token 时显示自带登录卡，不跳转；/radish 大屏页免登（教室投影场景）
+  if (to.path !== '/login' && to.path !== '/m' && to.path !== '/radish' && !token) return '/login'
   if (to.path === '/login' && token) return '/dashboard'
 })
 

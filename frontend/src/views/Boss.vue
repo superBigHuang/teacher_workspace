@@ -1,10 +1,23 @@
 <template>
   <div class="boss-stage">
-    <!-- 无 Boss：等待老师在手机开始 -->
+    <!-- 无 Boss：等待老师在大屏直接开始 -->
     <div v-if="!state" class="wait-cover">
       <div class="wait-emoji">👾</div>
       <div class="wait-title">今日还没有怪兽</div>
-      <div class="wait-sub">等待老师在手机 /m 开始今日挑战…</div>
+      <div class="wait-sub">选好题库范围，点「开始挑战」——学生答题通关扣血，HP 归零全班庆祝加分</div>
+      <div class="start-form">
+        <select v-model="form.categoryId" class="boss-select">
+          <option :value="null">全部分类</option>
+          <option v-for="c in cats" :key="c.id" :value="c.id">{{ (c.icon || '📚') + ' ' + c.name }}</option>
+        </select>
+        <select v-model="form.difficulty" class="boss-select">
+          <option :value="null">全部难度</option>
+          <option :value="1">简单</option>
+          <option :value="2">中等</option>
+          <option :value="3">困难</option>
+        </select>
+        <button class="ctrl-btn primary big" @click="doStart" :disabled="busy">👾 开始挑战</button>
+      </div>
     </div>
 
     <template v-else>
@@ -60,6 +73,25 @@
       </div>
     </template>
 
+    <!-- 大屏操作条：老师直接在大屏点（出题/抽人/判定），不用手机遥控；答案不显示，老师听答判定 -->
+    <div v-if="state && state.status === 'ACTIVE'" class="boss-ctrl">
+      <button class="ctrl-btn draw" @click="doDraw" :disabled="busy">🎲 出题</button>
+      <div class="ctrl-group">
+        <button class="ctrl-btn pick" @click="doPick('RANDOM')" :disabled="busy">🎲 随机抽人</button>
+        <select v-model="form.studentId" class="boss-select mini"
+                @change="form.studentId && doPick('MANUAL')">
+          <option :value="null">点名下拉…</option>
+          <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <button class="ctrl-btn pass" @click="doJudge('PASS')"
+                :disabled="busy || !curQuizId || !state.pickedStudentId">✅ 答对 +5</button>
+        <button class="ctrl-btn fail" @click="doJudge('FAIL')"
+                :disabled="busy || !curQuizId || !state.pickedStudentId">❌ 未答对</button>
+      </div>
+    </div>
+
     <!-- 返回工作台（菜单进入的出口；等待态/战斗态都显示，z 高于 header 与播报） -->
     <button class="boss-exit" @click="goBack">← 返回工作台</button>
 
@@ -75,6 +107,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import confetti from 'canvas-confetti'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
@@ -82,6 +115,76 @@ import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
 const router = useRouter()
 /** 退出大屏回工作台（菜单 /boss 为全屏独立页，需自带出口） */
 function goBack() { router.push('/dashboard') }
+
+// ============ 大屏直接操作（老师在大屏电脑点点点，不用手机遥控） ============
+/** 分类/学生下拉数据 */
+const cats = ref([])
+const students = ref([])
+/** 开始与出题共用条件 + 点名下拉选中 */
+const form = ref({ categoryId: null, difficulty: null, studentId: null })
+/** 当前题 id（draw 响应；答案不落大屏、不渲染，judge 时回传 quizId） */
+const curQuizId = ref(null)
+/** 操作进行中（防连点） */
+const busy = ref(false)
+
+async function loadOptions() {
+  if (!cats.value.length) {
+    try { cats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) }
+    catch { /* 下拉为空仍可全部分类开局 */ }
+  }
+  if (!students.value.length) {
+    try { students.value = await http.get('/roster/students') } catch { /* 点名不可用时仍可随机抽人 */ }
+  }
+}
+
+/** 开始今日挑战（幂等：已存在则返回现有 Boss） */
+async function doStart() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const r = await http.post('/boss/start', { categoryId: form.value.categoryId, difficulty: form.value.difficulty })
+    applyState(r)
+    ElMessage.success('今日挑战开始！')
+  } catch (e) { ElMessage.error(e?.message || '开始失败') } finally { busy.value = false }
+}
+
+/** 出题：响应含答案但大屏只存 id（题目经 loadToday/SSE 显示，答案不渲染） */
+async function doDraw() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const r = await http.post('/boss/draw', { categoryId: form.value.categoryId, difficulty: form.value.difficulty })
+    curQuizId.value = r.id
+    await loadToday()
+  } catch (e) { ElMessage.error(e?.message || '出题失败') } finally { busy.value = false }
+}
+
+/** 抽人：RANDOM 班主任班随机；MANUAL 用下拉选中学生（选中即抽） */
+async function doPick(mode) {
+  if (busy.value) return
+  const studentId = mode === 'MANUAL' ? form.value.studentId : null
+  if (mode === 'MANUAL' && !studentId) { ElMessage.warning('请先在下拉选择学生'); return }
+  busy.value = true
+  try {
+    const r = await http.post('/boss/pick-student', { mode, studentId })
+    if (state.value) { state.value.pickedStudentId = r.studentId; state.value.pickedStudentName = r.name }
+  } catch (e) { ElMessage.error(e?.message || '抽人失败') } finally { busy.value = false }
+}
+
+/** 判定：需已出题(curQuizId)且已抽人；PASS/FAIL 由后端结算扣血/发奖，响应带回整体状态 */
+async function doJudge(result) {
+  if (busy.value) return
+  const studentId = state.value && state.value.pickedStudentId
+  if (!curQuizId.value) { ElMessage.warning('请先出题'); return }
+  if (!studentId) { ElMessage.warning('请先抽人'); return }
+  busy.value = true
+  try {
+    const r = await http.post('/boss/judge', { studentId, quizId: curQuizId.value, result })
+    curQuizId.value = null   // 一题一判，消费后清空
+    applyState(r)
+    if (r.killed) ElMessage.success((r.killStudentName || '勇士') + ' 击杀怪兽！🎉')
+  } catch (e) { ElMessage.error(e?.message || '判定失败') } finally { busy.value = false }
+}
 
 /** 今日 Boss 整体状态（/boss/today：boss 全量 + 当前题 + 答题人 + stats；不含答案——防大屏泄题） */
 const state = ref(null)
@@ -197,6 +300,7 @@ function fireConfetti(big = false) {
 
 onMounted(() => {
   loadToday()
+  loadOptions()
   // 独立路由不经 MainLayout，SSE 通道需自建（同 /m 手机页模式）
   startRemote()
   offCmd = onRemoteCmd((action, payload) => {
@@ -244,6 +348,37 @@ onBeforeUnmount(() => {
 }
 .boss-exit:hover { background: rgba(255,255,255,.26); color: #fff; }
 
+/* 大屏操作条（老师直接在大屏点：出题/抽人/判定） */
+.boss-ctrl {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex; align-items: center; justify-content: center; gap: 30px; flex-wrap: wrap;
+  padding: 16px 24px; background: rgba(0,0,0,.52); backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255,255,255,.14);
+}
+.ctrl-group { display: flex; align-items: center; gap: 12px; }
+.ctrl-btn {
+  font-size: 26px; font-weight: 800; color: #fff; border: none; border-radius: 14px;
+  padding: 14px 30px; cursor: pointer; transition: transform .12s, filter .12s, opacity .12s;
+}
+.ctrl-btn:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.1); }
+.ctrl-btn:disabled { opacity: .38; cursor: not-allowed; }
+.ctrl-btn.primary { background: linear-gradient(135deg, #7c5cbf, #9b6dd6); box-shadow: 0 8px 26px rgba(124,92,191,.5); }
+.ctrl-btn.big { font-size: 30px; padding: 18px 52px; }
+.ctrl-btn.draw { background: linear-gradient(135deg, #3a9bd1, #2fa8a0); }
+.ctrl-btn.pick { background: linear-gradient(135deg, #f0a030, #ef7d4d); }
+.ctrl-btn.pass { background: linear-gradient(135deg, #2e9e5b, #43b581); }
+.ctrl-btn.fail { background: linear-gradient(135deg, #d05060, #e06a7a); }
+/* 下拉（开始表单 + 点名）：深色玻璃底，option 用深色文字 */
+.boss-select {
+  font-size: 20px; padding: 12px 16px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.14); color: #fff;
+  cursor: pointer;
+}
+.boss-select option { color: #222; }
+.boss-select.mini { font-size: 18px; padding: 11px 14px; }
+/* 等待封面开始表单 */
+.start-form { display: flex; gap: 16px; margin-top: 42px; align-items: center; flex-wrap: wrap; justify-content: center; }
+
 /* 等待态封面 */
 .wait-cover {
   position: absolute; inset: 0; z-index: 10;
@@ -268,7 +403,7 @@ onBeforeUnmount(() => {
 /* 主舞台左右分栏 */
 .boss-body {
   height: 100%; display: flex; align-items: center; justify-content: center;
-  gap: 90px; padding: 90px 60px 40px; box-sizing: border-box;
+  gap: 90px; padding: 90px 60px 150px; box-sizing: border-box;   /* 底部 150px 留给操作条 */
 }
 .boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 480px; }
 .info-zone { display: flex; flex-direction: column; gap: 26px; width: 660px; }

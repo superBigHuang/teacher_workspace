@@ -16,12 +16,31 @@
       </div>
 
       <nav>
-        <router-link v-for="item in navs" :key="item.path" :to="item.path"
-          class="nav-item" :style="{ '--nav': item.color, '--navbg': item.bg }">
-          <span v-if="item.emoji" class="nav-emoji">{{ item.emoji }}</span>
-          <el-icon v-else class="nav-icon"><component :is="item.icon" /></el-icon>
-          <span v-show="!collapsed" class="nav-text">{{ item.title }}</span>
-        </router-link>
+        <template v-for="item in navs" :key="item.group ? item.group : item.path">
+          <!-- 可展开分组（互动游戏等）：展开态点头折叠/展开；收起态点头进第一个子项 -->
+          <div v-if="item.group" class="nav-group">
+            <div class="nav-item nav-group-head" :style="{ '--nav': item.color, '--navbg': item.bg }"
+                 @click="clickGroup(item)">
+              <span class="nav-emoji">{{ item.emoji }}</span>
+              <span v-show="!collapsed" class="nav-text">{{ item.group }}</span>
+              <span v-show="!collapsed" class="nav-caret">{{ openGroup === item.group ? '▾' : '▸' }}</span>
+            </div>
+            <div v-show="!collapsed && openGroup === item.group" class="nav-subs">
+              <router-link v-for="sub in item.children" :key="sub.path" :to="sub.path"
+                class="nav-item nav-sub" :style="{ '--nav': item.color, '--navbg': item.bg }">
+                <span class="nav-emoji">{{ sub.emoji }}</span>
+                <span class="nav-text">{{ sub.title }}</span>
+              </router-link>
+            </div>
+          </div>
+          <!-- 普通菜单项 -->
+          <router-link v-else :to="item.path"
+            class="nav-item" :style="{ '--nav': item.color, '--navbg': item.bg }">
+            <span v-if="item.emoji" class="nav-emoji">{{ item.emoji }}</span>
+            <el-icon v-else class="nav-icon"><component :is="item.icon" /></el-icon>
+            <span v-show="!collapsed" class="nav-text">{{ item.title }}</span>
+          </router-link>
+        </template>
       </nav>
 
       <!-- 底部用户区 -->
@@ -83,6 +102,12 @@ const AVATARS = [
 
 const router = useRouter()
 const collapsed = ref(false)
+/** 当前展开的分组名（默认展开「互动游戏」，课堂常用）；收起态下点分组头直接进第一个子项 */
+const openGroup = ref('互动游戏')
+function clickGroup(item) {
+  if (collapsed.value) { router.push(item.children[0].path); return }
+  openGroup.value = openGroup.value === item.group ? '' : item.group
+}
 const displayName = ref(localStorage.getItem('displayName') || '老师')
 const school = ref('')
 const avatar = ref(localStorage.getItem('avatar') || '🐻')
@@ -147,7 +172,6 @@ const navs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
   { path: '/pet', title: '宠物园', emoji: '🐾', color: '#e08a4b', bg: '#fdeede' },
-  { path: '/boss', title: '打怪兽', emoji: '👾', color: '#7c5cbf', bg: '#efe9fb' },
   { path: '/daily', title: '班级日常', emoji: '📋', color: '#2fa8a0', bg: '#e0f5f3' },
   { path: '/duty', title: '值日表·班委', icon: 'Brush', color: '#52b788', bg: '#e4f6ec' },
   { path: '/score', title: '成绩分析', icon: 'TrendCharts', color: '#9b6dd6', bg: '#f0e8fb' },
@@ -156,7 +180,11 @@ const navs = [
   { path: '/parent', title: '家长联系方式', icon: 'Phone', color: '#e08a4b', bg: '#fdeede' },
   { path: '/timetable', title: '课程表', icon: 'Calendar', color: '#f06292', bg: '#fde4ee' },
   { path: '/todo', title: '待办事项', icon: 'CircleCheck', color: '#43b581', bg: '#e4f6ec' },
-  { path: '/m', title: '手机遥控', emoji: '📱', color: '#6c8ee3', bg: '#e8edfc' }
+  // 互动游戏分组：课堂投影小游戏，后续新游戏往 children 里加
+  { group: '互动游戏', emoji: '🎮', color: '#7c5cbf', bg: '#efe9fb', children: [
+    { path: '/boss', title: '打怪兽', emoji: '👾' },
+    { path: '/radish', title: '拔萝卜早读', emoji: '🥕' }
+  ] }
 ]
 
 function logout() {
@@ -207,6 +235,15 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
   background: var(--navbg); color: var(--nav);
   box-shadow: inset 3px 0 0 var(--nav);
 }
+/* 互动游戏分组：头部可点（展开/折叠），子项缩进虚线分隔 */
+.nav-group-head { cursor: pointer; }
+.nav-caret { margin-left: auto; font-size: 12px; color: #b0b3c0; }
+.nav-subs {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 4px 0 4px 16px; padding-left: 10px;
+  border-left: 2px dashed #ece6f5;
+}
+.nav-sub { padding: 10px 12px; font-size: 14px; }
 /* 底部用户区 */
 .user-area { margin-top: 10px; }
 .user-card {
