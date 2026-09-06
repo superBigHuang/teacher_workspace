@@ -16,6 +16,7 @@
     <template v-else>
       <!-- ============ 顶栏 ============ -->
       <header class="m-header">
+        <button class="m-back" @click="goBack">← 返回工作台</button>
         <div class="m-title">🐾 宠物遥控</div>
         <button class="m-logout" @click="logout">退出</button>
       </header>
@@ -174,6 +175,7 @@
 
 <script setup>
 import { ref, shallowRef, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import { usePets, PET_CATS } from '../composables/usePets'
@@ -183,6 +185,9 @@ import { startRemote, stopRemote, onRemoteCmd, sendCmd } from '../composables/us
 const CATS = PET_CATS
 
 const token = ref(localStorage.getItem('token'))
+const router = useRouter()
+/** PC 端从菜单进入全屏遥控页的出口（手机窄屏不显示此按钮，手机上 /m 即主页） */
+function goBack() { router.push('/dashboard') }
 const loginForm = ref({ username: '', password: '' })
 
 /** usePets() 实例（登录后才初始化，避免未登录发 401 请求被拦截器跳走） */
@@ -462,6 +467,16 @@ async function bossJudge(result) {
 .m-logout {
   border: 1px solid #f0d0dc; background: #fff; color: #c2708a; border-radius: 999px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+/* 返回工作台：仅 PC 宽屏显示（手机上 /m 即主页无工作台可回）；三栏布局时标题居中 */
+.m-back {
+  display: none;
+  border: 1px solid #c7d4f5; background: #fff; color: #5a76c8; border-radius: 999px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+@media (min-width: 768px) {
+  .m-back { display: inline-block; }
+  .m-title { flex: 1; text-align: center; padding: 0 8px; }
 }
 
 /* ---------- 宠物网格 ---------- */

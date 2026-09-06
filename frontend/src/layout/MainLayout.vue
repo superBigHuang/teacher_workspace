@@ -148,13 +148,15 @@ const navs = [
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
   { path: '/pet', title: '宠物园', emoji: '🐾', color: '#e08a4b', bg: '#fdeede' },
   { path: '/boss', title: '打怪兽', emoji: '👾', color: '#7c5cbf', bg: '#efe9fb' },
+  { path: '/daily', title: '班级日常', emoji: '📋', color: '#2fa8a0', bg: '#e0f5f3' },
   { path: '/duty', title: '值日表·班委', icon: 'Brush', color: '#52b788', bg: '#e4f6ec' },
   { path: '/score', title: '成绩分析', icon: 'TrendCharts', color: '#9b6dd6', bg: '#f0e8fb' },
   { path: '/comment', title: '期末评语', icon: 'EditPen', color: '#e06aa8', bg: '#fde7f3' },
   { path: '/roster', title: '花名册', icon: 'Notebook', color: '#d9a52e', bg: '#fbf2d6' },
   { path: '/parent', title: '家长联系方式', icon: 'Phone', color: '#e08a4b', bg: '#fdeede' },
   { path: '/timetable', title: '课程表', icon: 'Calendar', color: '#f06292', bg: '#fde4ee' },
-  { path: '/todo', title: '待办事项', icon: 'CircleCheck', color: '#43b581', bg: '#e4f6ec' }
+  { path: '/todo', title: '待办事项', icon: 'CircleCheck', color: '#43b581', bg: '#e4f6ec' },
+  { path: '/m', title: '手机遥控', emoji: '📱', color: '#6c8ee3', bg: '#e8edfc' }
 ]
 
 function logout() {
