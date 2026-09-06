@@ -147,6 +147,7 @@ const navs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
   { path: '/pet', title: '宠物园', emoji: '🐾', color: '#e08a4b', bg: '#fdeede' },
+  { path: '/boss', title: '打怪兽', emoji: '👾', color: '#7c5cbf', bg: '#efe9fb' },
   { path: '/duty', title: '值日表·班委', icon: 'Brush', color: '#52b788', bg: '#e4f6ec' },
   { path: '/score', title: '成绩分析', icon: 'TrendCharts', color: '#9b6dd6', bg: '#f0e8fb' },
   { path: '/comment', title: '期末评语', icon: 'EditPen', color: '#e06aa8', bg: '#fde7f3' },

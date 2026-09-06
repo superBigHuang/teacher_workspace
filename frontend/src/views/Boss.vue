@@ -60,6 +60,9 @@
       </div>
     </template>
 
+    <!-- 返回工作台（菜单进入的出口；等待态/战斗态都显示，z 高于 header 与播报） -->
+    <button class="boss-exit" @click="goBack">← 返回工作台</button>
+
     <!-- 击杀全屏播报 -->
     <transition name="bounce">
       <div v-if="killBanner" class="banner">
@@ -71,9 +74,14 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import http from '../api/http'
 import confetti from 'canvas-confetti'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
+
+const router = useRouter()
+/** 退出大屏回工作台（菜单 /boss 为全屏独立页，需自带出口） */
+function goBack() { router.push('/dashboard') }
 
 /** 今日 Boss 整体状态（/boss/today：boss 全量 + 当前题 + 答题人 + stats；不含答案——防大屏泄题） */
 const state = ref(null)
@@ -226,6 +234,16 @@ onBeforeUnmount(() => {
   color: #fff;
 }
 
+/* 返回工作台按钮（全屏独立页的出口；半透明玻璃不抢戏，等待态/战斗态均常驻右上角） */
+.boss-exit {
+  position: fixed; top: 16px; right: 22px; z-index: 40;
+  background: rgba(255,255,255,.12); color: rgba(255,255,255,.9);
+  border: 1px solid rgba(255,255,255,.28); border-radius: 999px;
+  padding: 9px 20px; font-size: 16px; font-weight: 700; cursor: pointer;
+  backdrop-filter: blur(6px); transition: background .15s, color .15s;
+}
+.boss-exit:hover { background: rgba(255,255,255,.26); color: #fff; }
+
 /* 等待态封面 */
 .wait-cover {
   position: absolute; inset: 0; z-index: 10;
@@ -239,7 +257,8 @@ onBeforeUnmount(() => {
 .boss-header {
   position: absolute; top: 0; left: 0; right: 0; z-index: 20;
   display: flex; align-items: center; gap: 20px;
-  padding: 18px 32px; background: rgba(0,0,0,.45); backdrop-filter: blur(8px);
+  /* 右 padding 加大：给右上角常驻「返回工作台」按钮腾位，避免压住状态胶囊 */
+  padding: 18px 160px 18px 32px; background: rgba(0,0,0,.45); backdrop-filter: blur(8px);
 }
 .bh-badge { font-size: 22px; font-weight: 800; color: #ffc107; }
 .bh-name { font-size: 22px; font-weight: 700; color: rgba(255,255,255,.9); }
