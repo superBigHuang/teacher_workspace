@@ -4,6 +4,8 @@ const routes = [
   { path: '/login', name: 'login', component: () => import('../views/Login.vue') },
   // 手机遥控页：独立全屏不套侧边栏布局，自带登录卡（教室投影时手机遥控加减分/进化播放）
   { path: '/m', name: 'mobile', meta: { title: '宠物遥控' }, component: () => import('../views/Mobile.vue') },
+  // 打怪兽大屏：独立全屏深色舞台（教室投影），正常鉴权（教室电脑为已登录的老师浏览器）
+  { path: '/boss', name: 'boss', meta: { title: '打怪兽' }, component: () => import('../views/Boss.vue') },
   // 打印页：独立路由不套侧边栏布局，A4 定向，数据由生成页写入 sessionStorage
   { path: '/print/report', name: 'printReport', meta: { title: '家长成绩通知单' }, component: () => import('../views/ScoreReport.vue') },
   { path: '/print/comments', name: 'printComments', meta: { title: '期末评语册' }, component: () => import('../views/CommentBook.vue') },

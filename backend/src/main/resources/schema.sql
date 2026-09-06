@@ -476,3 +476,35 @@ CREATE TABLE IF NOT EXISTS push_log (
   KEY idx_push_user (user_id),
   KEY idx_push_biz (user_id, channel, biz_ref)
 );
+
+-- 每日打怪兽（per-user；每天一只，uk(user_id, boss_date) 保证当日唯一；次日懒判 ESCAPED 不落库）
+CREATE TABLE IF NOT EXISTS daily_boss (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  boss_date DATE NOT NULL,
+  boss_name VARCHAR(32),
+  boss_emoji VARCHAR(8),
+  hp_total INT DEFAULT 100,
+  hp_left INT DEFAULT 100,
+  hit_per_pass INT DEFAULT 10,
+  kill_student_id BIGINT NULL,
+  killed_at DATETIME NULL,
+  status VARCHAR(8) DEFAULT 'ACTIVE' COMMENT 'ACTIVE/KILLED/ESCAPED',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_boss (user_id, boss_date)
+);
+
+-- 打怪兽命中明细（per-user；一次判定一行，biz_ref 唯一键防止重复发奖）
+CREATE TABLE IF NOT EXISTS boss_hit (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL DEFAULT 1,
+  boss_id BIGINT NOT NULL,
+  student_id BIGINT NOT NULL,
+  quiz_id BIGINT NULL,
+  result VARCHAR(8) COMMENT 'PASS/FAIL',
+  damage INT DEFAULT 0,
+  biz_ref VARCHAR(64),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_biz (user_id, biz_ref),
+  KEY idx_bh_boss (boss_id)
+);

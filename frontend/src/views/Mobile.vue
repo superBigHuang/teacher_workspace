@@ -22,6 +22,12 @@
 
       <!-- ============ 宠物网格（只列已领养） ============ -->
       <main class="m-grid">
+        <!-- 打怪兽入口卡片（网格第一格） -->
+        <button class="m-pet m-boss-entry" @click="openBoss">
+          <div class="boss-entry-emoji">👾</div>
+          <div class="m-pet-name">今日打怪兽</div>
+          <div class="m-pet-lv">{{ bossEntrySub }}</div>
+        </button>
         <button v-for="pet in adoptedPets" :key="pet.studentId" class="m-pet" @click="openSheet(pet)">
           <img :src="p.petImg(pet)" class="m-pet-img" :class="{ frozen: pet.frozen }" alt="" />
           <div class="m-pet-name">{{ pet.name }}</div>
@@ -31,6 +37,87 @@
         </button>
         <div v-if="p && !adoptedPets.length" class="m-empty">还没有领养宠物的学生<br/>请先在 PC 端座次表领养</div>
       </main>
+
+      <!-- ============ 打怪兽控制弹层 ============ -->
+      <div v-if="bossOpen" class="m-mask" @click.self="closeBoss">
+        <div class="m-sheet">
+          <div class="sheet-head">
+            <div class="boss-entry-emoji" style="font-size:56px;">{{ bossState.boss_emoji || '👾' }}</div>
+            <div class="sheet-id">
+              <div class="sheet-name">{{ bossState.boss_name || '每日打怪兽' }}</div>
+              <div class="sheet-lv">{{ bossHeadSub }}</div>
+            </div>
+            <button class="boss-close" @click="closeBoss">✕</button>
+          </div>
+
+          <!-- 无 Boss：开始面板（分类 + 难度） -->
+          <div v-if="!bossState.id" class="boss-panel">
+            <div class="boss-tip">创建今日怪兽：答题通关扣血，HP 归零全班庆祝加分</div>
+            <div class="boss-form-row">
+              <select v-model="bossForm.categoryId" class="boss-select">
+                <option :value="null">全部分类</option>
+                <option v-for="c in bossCats" :key="c.id" :value="c.id">{{ (c.icon || '📚') + ' ' + c.name }}</option>
+              </select>
+              <select v-model="bossForm.difficulty" class="boss-select">
+                <option :value="null">全部难度</option>
+                <option :value="1">简单</option>
+                <option :value="2">中等</option>
+                <option :value="3">困难</option>
+              </select>
+            </div>
+            <button class="boss-btn start" @click="bossStart">👾 开始挑战</button>
+          </div>
+
+          <!-- 有 Boss：控制面板（出题→抽人→判定） -->
+          <template v-else>
+            <!-- HP 条 -->
+            <div class="boss-hp-row">
+              <div class="boss-hp-track"><div class="boss-hp-fill" :style="{ width: bossHpPct + '%' }"></div></div>
+              <span class="boss-hp-num">{{ bossState.hp_left }}/{{ bossState.hp_total }}</span>
+            </div>
+            <div class="boss-mini-stats">✅ {{ bossState.stats?.pass || 0 }} · ❌ {{ bossState.stats?.fail || 0 }}
+              <template v-if="bossState.stats?.killStudentName"> · 🏆 {{ bossState.stats.killStudentName }}</template>
+            </div>
+
+            <!-- KILLED/ESCAPED：结束态 -->
+            <div v-if="bossState.status !== 'ACTIVE'" class="boss-panel">
+              <div class="boss-over-tip">{{ bossState.status === 'KILLED' ? '💀 今天的怪兽已被击败，明天再来！' : '💨 怪兽逃跑啦，明天再来！' }}</div>
+            </div>
+
+            <!-- ACTIVE：流程按钮区 -->
+            <div v-else class="boss-panel">
+              <!-- ① 出题：无当前题时显示 -->
+              <template v-if="!bossQuiz">
+                <button class="boss-btn draw" @click="bossDraw">🎲 出题</button>
+              </template>
+              <!-- ② 当前题 + 答案（只给老师） -->
+              <template v-else>
+                <div class="boss-q">
+                  <div class="boss-q-meta">{{ bossQuiz.categoryIcon || '📖' }} {{ bossQuiz.categoryName }} · {{ ['', '简单', '中等', '困难'][bossQuiz.difficulty] || '' }}</div>
+                  <div class="boss-q-text">{{ bossQuiz.question }}</div>
+                  <div class="boss-q-answer">答案：{{ bossQuiz.answer || '—' }}</div>
+                </div>
+                <!-- ③ 抽人 -->
+                <div v-if="!bossState.pickedStudentId" class="boss-form-row">
+                  <button class="boss-btn pick" @click="bossPick('RANDOM')">🎲 随机抽人</button>
+                  <select v-model="bossManualId" class="boss-select" @change="bossPick('MANUAL')">
+                    <option :value="null">点名…</option>
+                    <option v-for="s in bossStudents" :key="s.id" :value="s.id">{{ s.name }}</option>
+                  </select>
+                </div>
+                <!-- ④ 判定 -->
+                <template v-else>
+                  <div class="boss-answer-name">👉 答题人：<b>{{ bossState.pickedStudentName }}</b></div>
+                  <div class="boss-form-row">
+                    <button class="boss-btn pass" @click="bossJudge('PASS')">✅ 答对 +{{ bossScoreTip }}</button>
+                    <button class="boss-btn fail" @click="bossJudge('FAIL')">❌ 未答对</button>
+                  </div>
+                </template>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
 
       <!-- ============ 规则底部弹层 ============ -->
       <div v-if="sheetPet" class="m-mask" @click.self="sheetPet = null">
@@ -106,6 +193,43 @@ const sheetPet = ref(null)      // 当前打开规则弹层的学生
 const evalCat = ref('学习')
 const heldOpen = ref(false)
 const toast = ref(null)
+
+/* ---------- 打怪兽控制卡状态 ---------- */
+/** 弹层开关 */
+const bossOpen = ref(false)
+/** /boss/today 状态（boss 全量 + stats；ACTIVE 流程靠它驱动） */
+const bossState = ref({})
+/** 当前题（draw 响应，含答案——只在本页展示，绝不推大屏） */
+const bossQuiz = ref(null)
+/** 点名抽人的学生 id（select 双用：值与触发） */
+const bossManualId = ref(null)
+/** 开始面板：分类/难度（null=不过滤） */
+const bossForm = ref({ categoryId: null, difficulty: null })
+/** 分类下拉数据（GET /quiz/categories） */
+const bossCats = ref([])
+/** 点名下拉的班级学生（GET /roster/students） */
+const bossStudents = ref([])
+
+/** 入口卡片副标题：有 Boss 显示 HP/结束态，无则引导开始 */
+const bossEntrySub = computed(() => {
+  if (!bossState.value.id) return '👉 点击开始'
+  if (bossState.value.status === 'KILLED') return '💀 已击败'
+  if (bossState.value.status === 'ESCAPED') return '💨 已逃跑'
+  return `HP ${bossState.value.hp_left}/${bossState.value.hp_total}`
+})
+/** 弹层头部副标题 */
+const bossHeadSub = computed(() => {
+  if (!bossState.value.id) return '每日一题闯关 · 全班同乐'
+  const st = bossState.value.stats || {}
+  return `HP ${bossState.value.hp_left}/${bossState.value.hp_total} · ✅${st.pass || 0} ❌${st.fail || 0}`
+})
+const bossHpPct = computed(() => {
+  const s = bossState.value
+  if (!s.hp_total) return 0
+  return Math.max(0, Math.round((s.hp_left / s.hp_total) * 100))
+})
+/** 答对按钮分值提示（与后端 setting 默认一致，仅展示用） */
+const bossScoreTip = computed(() => (bossState.value.hit_per_pass || 10) + ' 成长值')
 
 const adoptedPets = computed(() => (p.value ? p.value.pets.value.filter(x => x.petId) : []))
 const heldList = computed(() => (p.value ? p.value.heldEvolves.value : []))
@@ -224,6 +348,88 @@ function playOne(h) {
   sendCmd('evolve.play', { studentId: h.studentId })
   P.heldEvolves.value = P.heldEvolves.value.filter(x => x.studentId !== h.studentId)
 }
+
+/* ---------- 打怪兽控制卡 ---------- */
+
+/** 打开弹层：拉今日 Boss 状态；分类/学生下拉数据只拉一次（懒加载） */
+async function openBoss() {
+  bossOpen.value = true
+  bossQuiz.value = null
+  bossManualId.value = null
+  refreshBoss()
+  if (!bossCats.value.length) {
+    try { bossCats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) } catch { /* 下拉为空仍可全部分类开局 */ }
+  }
+  if (!bossStudents.value.length) {
+    try { bossStudents.value = await http.get('/roster/students') } catch { /* 点名不可用时仍可随机抽人 */ }
+  }
+}
+
+/** 关闭弹层：清当前题与点名选择（内存态当前题在后端仍保留，重开可继续判定） */
+function closeBoss() {
+  bossOpen.value = false
+  bossQuiz.value = null
+  bossManualId.value = null
+}
+
+/** 刷新今日 Boss 状态（null 归一为空对象，驱动 template 的 !bossState.id 分支） */
+async function refreshBoss() {
+  try {
+    const d = await http.get('/boss/today')
+    bossState.value = d || {}
+  } catch { /* 网络抖动保持原状态，下次操作响应会覆盖 */ }
+}
+
+/** 开始挑战：幂等（当日已存在直接返回），成功后进入控制面板 */
+async function bossStart() {
+  const r = await http.post('/boss/start', {
+    categoryId: bossForm.value.categoryId,
+    difficulty: bossForm.value.difficulty
+  })
+  bossState.value = r
+  navigator.vibrate?.(30)
+}
+
+/** 出题：返回题 + 答案（只在本页展示）；同时刷新 state 带回当前题快照 */
+async function bossDraw() {
+  const r = await http.post('/boss/draw', {
+    categoryId: bossForm.value.categoryId,
+    difficulty: bossForm.value.difficulty
+  })
+  bossQuiz.value = r
+  bossManualId.value = null
+  refreshBoss()
+}
+
+/** 抽人：RANDOM 班级随机 / MANUAL 点名下拉 @change 触发；成功即更新答题人（大屏靠 SSE 高亮） */
+async function bossPick(mode) {
+  if (mode === 'MANUAL' && !bossManualId.value) return
+  const body = mode === 'MANUAL' ? { mode, studentId: bossManualId.value } : { mode }
+  const r = await http.post('/boss/pick-student', body)
+  bossState.value.pickedStudentId = r.studentId
+  bossState.value.pickedStudentName = r.name
+  navigator.vibrate?.(30)
+}
+
+/**
+ * 判定：PASS/FAIL → 后端一题一判；响应为最新 state（击杀时附 killed/killStudentName）。
+ * 判定后清当前题回到「出题」步；击杀时震动 + 提示。
+ */
+async function bossJudge(result) {
+  const r = await http.post('/boss/judge', {
+    studentId: bossState.value.pickedStudentId,
+    quizId: bossQuiz.value.id,
+    result
+  })
+  bossState.value = r
+  bossQuiz.value = null
+  bossManualId.value = null
+  if (r.killed) {
+    navigator.vibrate?.(200)
+    ElMessage.success(`🎉 ${r.killStudentName} 击杀了怪兽！`)
+    P?.loadPets()
+  }
+}
 </script>
 
 <style scoped>
@@ -341,4 +547,55 @@ function playOne(h) {
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -10px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .toast-undo { border: none; background: #ffd166; color: #6a4a10; border-radius: 999px; padding: 6px 12px; font-weight: 800; font-size: 13px; cursor: pointer; white-space: nowrap; }
+
+/* ---------- 打怪兽入口卡（网格第一格，区别于宠物卡的暗紫渐变） ---------- */
+.m-boss-entry {
+  border-color: #d8d0f0; background: linear-gradient(150deg, #f3efff, #e8f0ff);
+}
+.boss-entry-emoji { font-size: 56px; line-height: 1.2; }
+
+/* ---------- 打怪兽控制弹层 ---------- */
+.boss-close {
+  border: none; background: #f0e8ef; color: #9a8fa0; border-radius: 999px;
+  width: 34px; height: 34px; font-size: 15px; cursor: pointer; flex-shrink: 0;
+}
+.boss-panel { display: flex; flex-direction: column; gap: 12px; }
+.boss-tip { font-size: 13px; color: #a89aa8; line-height: 1.6; }
+.boss-form-row { display: flex; gap: 10px; }
+.boss-select {
+  flex: 1; min-width: 0; padding: 12px 10px; border: 2px solid #e4dcf0; border-radius: 14px;
+  font-size: 15px; color: #5a5a66; background: #fff; outline: none;
+}
+.boss-btn {
+  border: none; border-radius: 14px; padding: 14px; font-size: 16px; font-weight: 800;
+  cursor: pointer; color: #fff; transition: transform .12s;
+}
+.boss-btn:active { transform: scale(.96); }
+.boss-btn.start { background: linear-gradient(135deg, #a78bfa, #f78fb3); box-shadow: 0 6px 16px rgba(167, 139, 250, .4); }
+.boss-btn.draw { background: linear-gradient(135deg, #ffd166, #ff9a76); box-shadow: 0 6px 16px rgba(255, 160, 90, .35); }
+.boss-btn.pick { flex: 1; background: linear-gradient(135deg, #74d3d8, #7ba7f5); box-shadow: 0 6px 16px rgba(116, 190, 235, .4); }
+
+/* HP 条（沿用宠物经验条配色，血条红） */
+.boss-hp-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.boss-hp-track { flex: 1; height: 14px; background: #f0e8ef; border-radius: 99px; overflow: hidden; }
+.boss-hp-fill { height: 100%; background: linear-gradient(90deg, #ff7a8a, #ff5252); border-radius: 99px; transition: width .5s ease; }
+.boss-hp-num { font-size: 14px; font-weight: 800; color: #e06070; white-space: nowrap; }
+.boss-mini-stats { font-size: 13px; font-weight: 700; color: #8a8090; margin-bottom: 12px; }
+
+.boss-over-tip {
+  text-align: center; font-size: 16px; font-weight: 800; color: #9a8fa0;
+  background: #f6f2f4; border-radius: 14px; padding: 22px;
+}
+.boss-q { background: #f8f5ff; border: 2px solid #e4dcf0; border-radius: 14px; padding: 14px; }
+.boss-q-meta { font-size: 12px; font-weight: 700; color: #a78bfa; margin-bottom: 6px; }
+.boss-q-text { font-size: 17px; font-weight: 800; color: #4a4a55; line-height: 1.5; }
+.boss-q-answer {
+  margin-top: 10px; font-size: 15px; font-weight: 800; color: #2faa62;
+  background: #f0fbf4; border: 1px dashed #bfe8cf; border-radius: 10px; padding: 8px 10px;
+}
+.boss-answer-name { font-size: 15px; font-weight: 700; color: #5a5a66; }
+.boss-answer-name b { color: #e06aa8; }
+.boss-btn.pass { flex: 1; background: linear-gradient(135deg, #7bd88f, #4fb86e); box-shadow: 0 6px 16px rgba(80, 190, 110, .35); }
+.boss-btn.fail { flex: 1; background: linear-gradient(135deg, #f0909a, #e06070); box-shadow: 0 6px 16px rgba(224, 100, 110, .35); }
+
 </style>

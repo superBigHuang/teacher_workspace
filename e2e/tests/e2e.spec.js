@@ -141,6 +141,10 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       }
     } catch (e) { /* 忽略 */ }
     try {
+      // 打怪兽兜底：重置当日 Boss（撤回 BOSS 流水回滚成长值 + 删 boss/hit/会话），防 11k 中途失败残留
+      await request.post(API + '/boss/reset', { headers: authHeader() })
+    } catch (e) { /* 忽略 */ }
+    try {
       // 恢复 AI 启用（11c 步骤临时关闭走模板；admin 为真实使用账号）
       await request.put(API + '/ai/config', { headers: authHeader(), data: { enabled: true } })
     } catch (e) { /* 忽略 */ }
@@ -1810,6 +1814,7 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       // draw#2：乙从未用过（NULL 优先）→ 必返乙（T2）
       let d2 = await apiPost('/quiz/draw', { categoryId: catId })
       expect(d2.data.question).toBe('E2E抽题乙')
+      await page.waitForTimeout(1100)   // 隔开 d2(乙 T2) 与 d3(甲 T3)，否则同秒 RAND() 决胜 flaky
       // draw#3：甲 T1 < 乙 T2 → 最久未用必返甲；draw#4：乙最旧必返乙（交替）
       let d3 = await apiPost('/quiz/draw', { categoryId: catId })
       expect(d3.data.question).toBe('E2E抽题甲')
@@ -1869,6 +1874,123 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
         await request.delete(API + '/quiz/' + r.id, { headers: authHeader() })
       }
       expect((await apiPost('/quiz/category/delete/' + impCat2.id)).code).toBe(200)
+    })
+
+    // ============ 11k. 每日打怪兽 ============
+    await test.step('打怪兽：reset 兜底→开始(幂等)→出题(手机含答案/大屏无答案)→抽人→FAIL 不扣血→PASS 循环击杀三档奖励→reset 回滚成长值；/boss 大屏等待态（自清理）', async () => {
+      const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
+      const apiGet = (url) => j(request.get.bind(request), API + url)
+      const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
+      const petsAll = async () => ((await apiGet('/pet/pets')).data.pets || [])
+      const bossLogs = async () =>
+        ((await apiGet('/pet/logs?studentId=' + testStudentId)).data || []).filter(l => l.source === 'BOSS')
+
+      // 开头兜底重置（防当日残留 Boss/流水干扰数字断言）
+      await apiPost('/boss/reset', {})
+      // 专用题库分类 + 2 题（限定 boss/draw 抽题范围；afterAll 题库兜底按 E2E 名清理，此处也显式删）
+      const catId = (await apiPost('/quiz/category', { name: 'E2E打怪兽分类', icon: '👾' })).data.id
+      const qA = (await apiPost('/quiz/save', { categoryId: catId, question: 'E2E怪兽题甲：2+2=?', answer: '4', difficulty: 1 })).data.id
+      const qB = (await apiPost('/quiz/save', { categoryId: catId, question: 'E2E怪兽题乙：3+3=?', answer: '6', difficulty: 1 })).data.id
+
+      // ① 今日无 Boss：today=null；未开始出题被拒
+      expect((await apiGet('/boss/today')).data).toBeNull()
+      expect((await apiPost('/boss/draw', { categoryId: catId })).code).not.toBe(200)
+
+      // ② 开始挑战：幂等（两次 start 返回同一 id）；HP 满、ACTIVE、带 emoji/名字；大屏 state 无 answer 字段
+      const s1 = await apiPost('/boss/start', {})
+      expect(s1.code).toBe(200)
+      const bossId = s1.data.id
+      expect((await apiPost('/boss/start', {})).data.id).toBe(bossId)
+      let t = (await apiGet('/boss/today')).data
+      expect(t.id).toBe(bossId)
+      expect(t.status).toBe('ACTIVE')
+      expect(t.hp_left).toBe(t.hp_total)
+      expect(t.boss_emoji).toBeTruthy()
+      expect(t.boss_name).toBeTruthy()
+      expect(t).not.toHaveProperty('answer')
+      const needPass = Math.ceil(t.hp_total / t.hit_per_pass)   // 默认 100/10=10 次通关击杀
+
+      // ③ 出题：手机端响应含答案；大屏 today 只回题干不含答案
+      const draw = await apiPost('/boss/draw', { categoryId: catId })
+      expect(draw.code).toBe(200)
+      expect(draw.data.answer).toBeTruthy()
+      expect(['E2E怪兽题甲：2+2=?', 'E2E怪兽题乙：3+3=?']).toContain(draw.data.question)
+      t = (await apiGet('/boss/today')).data
+      expect(t.question).toBe(draw.data.question)
+      expect(t.answer).toBeUndefined()
+
+      // ④ 抽人：MANUAL 点测试生（创建默认分入班主任班）；state 带回答题人
+      const pick = await apiPost('/boss/pick-student', { mode: 'MANUAL', studentId: testStudentId })
+      expect(pick.code).toBe(200)
+      expect(pick.data.studentId).toBe(testStudentId)
+      expect((await apiGet('/boss/today')).data.pickedStudentId).toBe(testStudentId)
+
+      // ⑤ FAIL：不扣血、不加分、stats.fail+1；判定后当前题消费（question 清空）
+      const hpBeforeFail = t.hp_left
+      const jf = await apiPost('/boss/judge', { studentId: testStudentId, quizId: draw.data.id, result: 'FAIL' })
+      expect(jf.code).toBe(200)
+      expect(jf.data.hp_left).toBe(hpBeforeFail)
+      t = (await apiGet('/boss/today')).data
+      expect(t.stats.fail).toBe(1)
+      expect(t.question).toBeNull()
+      expect((await bossLogs()).length).toBe(0)   // FAIL 不写成长值流水
+      // 乱序防护：未出题直接判定被拒
+      expect((await apiPost('/boss/judge', { studentId: testStudentId, quizId: qA, result: 'PASS' })).code).not.toBe(200)
+
+      // ⑥ 记录一名真实学生宠物成长值（验证击杀"全班同庆 +2"被 reset 回滚，不留污染）
+      const realPet = (await petsAll()).find(p => p.studentId !== testStudentId && !String(p.name || '').includes('E2E'))
+      const expBefore = realPet ? realPet.exp : null
+
+      // ⑦ PASS 循环到击杀：每次 出题→点名测试生→判定；HP 递减，最后一击 killed
+      let killed = false
+      for (let i = 0; i < needPass + 2 && !killed; i++) {
+        const d = await apiPost('/boss/draw', { categoryId: catId })
+        expect(d.code).toBe(200)
+        await apiPost('/boss/pick-student', { mode: 'MANUAL', studentId: testStudentId })
+        const jj = await apiPost('/boss/judge', { studentId: testStudentId, quizId: d.data.id, result: 'PASS' })
+        expect(jj.code).toBe(200)
+        if (jj.data.killed) {
+          killed = true
+          expect(jj.data.killStudentName).toBeTruthy()
+        }
+      }
+      expect(killed).toBe(true)
+      t = (await apiGet('/boss/today')).data
+      expect(t.status).toBe('KILLED')
+      expect(t.hp_left).toBe(0)
+      expect(t.kill_student_id).toBe(testStudentId)
+      expect(t.stats.pass).toBe(needPass)
+      // 击杀后出题/判定被拒
+      expect((await apiPost('/boss/draw', { categoryId: catId })).code).not.toBe(200)
+
+      // ⑧ 三档奖励：通关 ×needPass（每条 +5）+ 击杀 +10；测试生在班主任班时还吃"全班同庆 +2"（创建默认分班）
+      const logs = await bossLogs()
+      const passLogs = logs.filter(l => l.score === 5 && String(l.remark || '').includes('通关'))
+      const killLogs = logs.filter(l => l.score === 10 && String(l.remark || '').includes('击杀'))
+      const allLogs = logs.filter(l => l.score === 2 && String(l.remark || '').includes('同庆'))
+      expect(passLogs.length).toBe(needPass)
+      expect(killLogs.length).toBe(1)
+      expect(allLogs.length).toBeLessThanOrEqual(1)   // 在班则 1 条同庆，不在则 0
+      expect(logs.reduce((a, l) => a + l.score, 0)).toBe(needPass * 5 + 10 + allLogs.length * 2)
+
+      // ⑨ reset：Boss/命中清空、BOSS 流水撤回（成长值回滚）、today=null
+      await apiPost('/boss/reset', {})
+      expect((await apiGet('/boss/today')).data).toBeNull()
+      expect((await bossLogs()).length).toBe(0)
+      if (realPet) {
+        const after = (await petsAll()).find(p => p.studentId === realPet.studentId)
+        expect(after.exp).toBe(expBefore)   // 全班同庆 +2 已随撤回回滚，真实学生成长值零污染
+      }
+
+      // ⑩ 清理专用分类（先删题再删空分类）
+      for (const id of [qA, qB]) {
+        await request.delete(API + '/quiz/' + id, { headers: authHeader() })
+      }
+      expect((await apiPost('/quiz/category/delete/' + catId)).code).toBe(200)
+
+      // ⑪ /boss 大屏页：reset 后无 Boss → 等待老师开始封面（独立路由正常鉴权渲染）
+      await page.goto('/boss')
+      await expect(page.locator('.wait-title', { hasText: '今日还没有怪兽' })).toBeVisible({ timeout: 8000 })
     })
 
     // ============ 11g. 头像与班级设置 ============
