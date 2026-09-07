@@ -12,16 +12,19 @@
       <span class="vb-mic" :class="{ err: micError }">{{ micError ? '🎤 被禁用' : '🎤 已开' }}</span>
     </div>
 
-    <!-- 主舞台：三段视频复用一个 video 标签，切换 src -->
+    <!-- 主舞台：循环段用双 video 叠化无缝循环；intro/success/ending 用单独 solo 单片 -->
     <div class="video-wrap">
+      <!-- 双机叠化：A/B 均加载 loop.mp4，主机播到尾段时副机从头淡入、主机淡出，交叉淡化掩盖循环接缝 -->
+      <video ref="loopElA" class="stage-video loop-video" playsinline preload="auto" :src="SRC.loop"></video>
+      <video ref="loopElB" class="stage-video loop-video" playsinline preload="auto" :src="SRC.loop"></video>
+      <!-- 单片：开头/拔出/感谢成片；仅 INTRO/SUCCESS/ENDING 可见（opacity 瞬时切换，不挡循环双机） -->
       <video
-        ref="videoEl"
-        class="stage-video"
+        ref="soloEl"
+        class="stage-video solo-video"
         playsinline
         preload="auto"
-        @timeupdate="onTimeUpdate"
-        @ended="onVideoEnded"
-        @loadedmetadata="onVideoMeta"
+        @ended="onSoloEnded"
+        :style="{ opacity: (state === 'INTRO' || state === 'SUCCESS' || state === 'ENDING') ? 1 : 0 }"
       ></video>
 
       <!-- 左下角萝卜计数 -->
@@ -135,19 +138,27 @@ const router = useRouter()
 /** 退出大屏回工作台（菜单进入的出口；未登录直访时路由守卫会导向登录页） */
 function goBack() { router.push('/dashboard') }
 
-// ============ 状态机：IDLE → READY → PULLING → SUCCESS → PULLING → … → ENDING → IDLE ============
+// ============ 状态机：IDLE → READY → INTRO → PULLING ⇄ SUCCESS → … → ENDING → IDLE ============
 const state = ref('IDLE')
-const videoEl = ref(null)
+// 循环段双机叠化：loopElA/loopElB 都加载 loop.mp4 交叉淡化；soloEl 播 intro/success/ending
+const loopElA = ref(null)
+const loopElB = ref(null)
+const soloEl = ref(null)
 
 // 素材路径（public/radish/ 下）
 const SRC = {
-  pull: '/radish/pull.mp4',       // 循环源：1~3s 拔萝卜动作
-  success: '/radish/success.mp4', // 拔出萝卜短片
-  ending: '/radish/ending.mp4'    // 感谢成片
+  intro: '/radish/intro.mp4',     // 开头（拔萝卜-1，1.19s，每次开始播一次）
+  loop: '/radish/loop.mp4',       // 循环用力拔（拔萝卜-2，1.72s，双 video 叠化无缝循环）
+  pullout: '/radish/pullout.mp4', // 拔出来动作（拔萝卜-3，3.41s）
+  success: '/radish/success.mp4', // 拔出庆祝成片（8.83s）
+  ending: '/radish/ending.mp4'    // 感谢成片（7.2s，结束早读）
 }
-// 循环区间（秒）
-const LOOP_START = 1.0
-const LOOP_END = 3.0
+// 拔出萝卜时连播：pullout（拔出来）→ success（庆祝成片），全播完回循环
+// 叠化时长（秒）：主机播到尾段时两机交叉淡化的窗口；loop 片段约 1.72s，0.35s 接缝柔和且不频繁
+const FADE = 0.35
+// 叠化运行态：activeIdx 当前主播放机（0=A/1=B）；crossfade 非 null 表示正在交叉（含起始时间戳）
+let activeIdx = 0
+let crossfade = null
 
 // ============ 音量采集（Web Audio API） ============
 let audioCtx = null, analyser = null, micStream = null
@@ -231,6 +242,9 @@ const finalComment = computed(() => {
 // ============ 麦克风 ============
 async function initMic() {
   micError.value = ''
+  // 清理上一次采集（"测试麦克风"后再点开始会重复调用，避免麦克风/AudioContext 泄漏堆积）
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+  if (audioCtx) { try { audioCtx.close() } catch (e) { /* 已关闭忽略 */ } audioCtx = null }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
     audioCtx = new (window.AudioContext || window.webkitAudioContext)()
@@ -276,28 +290,76 @@ async function start() {
       samples.sort((a, b) => a - b)
       // 取 90 分位作为底噪（排除突发响动）
       noiseFloor.value = samples[Math.floor(samples.length * 0.9)] || 0.05
-      startPulling()
+      startIntro()
     }
   }
   tick()
 }
 
-// ============ PULLING 拔萝卜循环 ============
+// ============ INTRO 开头片 → PULLING 叠化循环 ============
 let rafId = null
 let lastT = 0
+let quietFrames = 0   // 连续低音量帧计数（静音回退的 1.5s 宽限用，60fps）
+let successStage = '' // SUCCESS 连播阶段：'pullout'（拔出来）→ 'celebrate'（庆祝成片）
+
+/** 测底噪后播开头片（一次），播完 onSoloEnded 进入叠化循环 */
+function startIntro() {
+  state.value = 'INTRO'
+  playSolo(SRC.intro)
+}
+
+/** 播放单片（intro/success/ending）；播放前先停掉叠化循环双机 */
+function playSolo(src) {
+  stopLoop()
+  const s = soloEl.value
+  if (s) {
+    s.src = src
+    s.currentTime = 0
+    s.playbackRate = 1.0
+    s.play().catch(() => {})
+  }
+}
+
+/** 启动叠化循环：A 机从头主播放（不透明），B 机暂停待命（透明） */
+function startLoop() {
+  activeIdx = 0
+  crossfade = null
+  const a = loopElA.value, b = loopElB.value
+  if (a) {
+    a.currentTime = 0
+    a.playbackRate = 1
+    a.volume = 1
+    a.style.opacity = '1'
+    a.play().catch(() => {})
+  }
+  if (b) {
+    b.pause()
+    b.currentTime = 0
+    b.playbackRate = 1
+    b.volume = 1
+    b.style.opacity = '0'
+  }
+}
+
+/** 停止叠化循环：双机暂停、复位透明（切 solo 单片或重置/结束时调用） */
+function stopLoop() {
+  crossfade = null
+  for (const el of [loopElA.value, loopElB.value]) {
+    if (el) {
+      el.pause()
+      el.currentTime = 0
+      el.style.opacity = '0'
+    }
+  }
+}
 
 function startPulling() {
   state.value = 'PULLING'
   progress.value = 0
   combo.value = 0
-  const v = videoEl.value
-  if (v) {
-    v.src = SRC.pull
-    v.loop = false
-    v.muted = false
-    v.currentTime = LOOP_START
-    v.play().catch(() => {})
-  }
+  quietFrames = 0
+  if (soloEl.value) soloEl.value.pause()
+  startLoop()
   if (countdownLeft.value <= 0 && cfg.countdownMin > 0) {
     countdownLeft.value = cfg.countdownMin * 60
     startCountdown()
@@ -311,10 +373,15 @@ function pullLoop(now) {
   const dt = Math.min(0.1, (now - lastT) / 1000)
   lastT = now
 
-  // 音量平滑（0.15 新 + 0.85 旧）
+  // 音量非对称平滑：上升响应快（跟得上朗读），下降缓慢（字间停顿/换气不暴跌）。
+  // 旧的对称平滑(0.15/0.85)在朗读停顿的瞬间音量掉底，表现为音量条"跳动"并误触发静音回退。
   const raw = readVolume()
   const effective = Math.max(0, raw - noiseFloor.value)
-  volume.value = volume.value * 0.85 + effective * 0.15
+  if (effective >= volume.value) {
+    volume.value = volume.value * 0.5 + effective * 0.5     // attack：约 2 帧即跟上
+  } else {
+    volume.value = volume.value * 0.94 + effective * 0.06   // decay：时间常数约 0.28s，停顿不暴跌
+  }
 
   // 连击：持续超阈值 5 秒 → 1.5 倍速
   if (volume.value >= cfg.threshold) {
@@ -331,9 +398,15 @@ function pullLoop(now) {
   const gain = Math.max(0, volume.value - cfg.threshold) * K * speedMul / difficulty.value * dt
   progress.value = Math.min(100, progress.value + gain)
 
-  // 静音回退：低于阈值一半时每帧 -0.3%（每秒约 -18%），下限 30%
-  if (volume.value < cfg.threshold * 0.5 && progress.value > 30) {
-    progress.value = Math.max(30, progress.value - 0.3 * dt * 60)
+  // 静音回退：需"持续"低于阈值一半约 1.5 秒才开始（宽限，朗读换气/字间停顿不误触发）；
+  // 回退缓慢（每秒约 -8%，旧值 -18% 太急），下限 30% 保护积极性。
+  if (volume.value < cfg.threshold * 0.5) {
+    quietFrames++
+  } else {
+    quietFrames = 0
+  }
+  if (quietFrames > 90 && progress.value > 30) {
+    progress.value = Math.max(30, progress.value - 0.13 * dt * 60)
   }
 
   // 峰值纪录
@@ -343,14 +416,39 @@ function pullLoop(now) {
     peakTime.value = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
   }
 
-  // 视频调速与进度同步
-  const v = videoEl.value
-  if (v && !v.paused) {
-    // playbackRate 0.5~2.0 随音量
-    v.playbackRate = 0.5 + Math.min(1.5, (volume.value / Math.max(0.01, cfg.threshold)) * 0.75)
-    // currentTime 与 progress 同步（0%→LOOP_START, 100%→LOOP_END）
-    const target = LOOP_START + (progress.value / 100) * (LOOP_END - LOOP_START)
-    if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target
+  // 双机叠化循环：视频始终恒速 1x 播放，不随音量变速（变速会让兔子动作滑稽）。
+  // "声音越大拔得越快"由进度积分表达——volume 越大 progress 涨越快，拔一根所需的循环次数越少。
+  // 循环不靠 seek 回跳（硬切突兀）：主机播到尾段时副机从头淡入、主机淡出，结尾"融进"开头。
+  const active = activeIdx === 0 ? loopElA.value : loopElB.value
+  const standby = activeIdx === 0 ? loopElB.value : loopElA.value
+  if (active && standby) {
+    const dur = active.duration
+    // 主机剩 FADE 秒到结尾时开始叠化（恒速播放，触发点固定在 dur-FADE）
+    if (!crossfade && dur && isFinite(dur) && active.currentTime >= dur - FADE) {
+      standby.currentTime = 0
+      standby.volume = 0
+      standby.style.opacity = '0'
+      standby.play().catch(() => {})
+      requestAnimationFrame(() => { standby.style.opacity = '1' }) // 下一帧再设 1，触发 CSS 淡入
+      active.style.opacity = '0'                                  // 主机同步淡出
+      crossfade = { t0: performance.now() }
+    }
+    if (crossfade) {
+      const t = Math.min(1, (performance.now() - crossfade.t0) / (FADE * 1000))
+      standby.volume = t        // 声音也交叉淡化，避免双机音轨重叠
+      active.volume = 1 - t
+      if (t >= 1) {
+        // 收尾：旧主机暂停复位为待命态，主副角色互换
+        active.pause()
+        active.currentTime = 0
+        active.volume = 1
+        active.style.opacity = '0'
+        standby.volume = 1
+        standby.style.opacity = '1'
+        activeIdx = 1 - activeIdx
+        crossfade = null
+      }
+    }
   }
 
   // 拔出判定
@@ -377,13 +475,9 @@ function onSuccess() {
   // 撒花（复用 EvolutionShow 三发模式）
   fireConfetti()
 
-  // 切拔出视频
-  const v = videoEl.value
-  if (v) {
-    v.src = SRC.success
-    v.currentTime = 0
-    v.play().catch(() => {})
-  }
+  // 拔出连播：先播"拔出来"动作片(pullout)，onSoloEnded 里自动接"庆祝成片"(success)，全播完回循环
+  successStage = 'pullout'
+  playSolo(SRC.pullout)
 
   // 目标达成：萝卜变金
   if (carrots.value === goalCount.value) {
@@ -402,29 +496,22 @@ function fireConfetti(big = false) {
   }, 260)
 }
 
-// ============ 视频事件 ============
-function onTimeUpdate() {
-  const v = videoEl.value
-  if (!v) return
-  // 循环区间：播到 LOOP_END 回 LOOP_START
-  if (state.value === 'PULLING' && v.currentTime >= LOOP_END) {
-    v.currentTime = LOOP_START
-  }
-}
-
-function onVideoEnded() {
-  if (state.value === 'SUCCESS') {
-    // 拔出视频播完 → 下一根
+// ============ 单片视频事件 ============
+// 循环段的叠化在 pullLoop(rAF) 里管理、无事件监听；solo 单片（intro/success/ending）播完在此分发
+function onSoloEnded() {
+  if (state.value === 'INTRO') {
+    // 开头片播完 → 进入叠化循环
     startPulling()
+  } else if (state.value === 'SUCCESS') {
+    // 拔出连播：拔出来(pullout) → 庆祝成片(success) → 回循环拔下一根
+    if (successStage === 'pullout') {
+      successStage = 'celebrate'
+      playSolo(SRC.success)
+    } else {
+      startPulling()
+    }
   } else if (state.value === 'ENDING') {
     showReport.value = true
-  }
-}
-
-function onVideoMeta() {
-  const v = videoEl.value
-  if (v && state.value === 'PULLING' && v.currentTime < LOOP_START) {
-    v.currentTime = LOOP_START
   }
 }
 
@@ -445,12 +532,8 @@ function endSession() {
     isNewRecord.value = false
   }
 
-  const v = videoEl.value
-  if (v) {
-    v.src = SRC.ending
-    v.currentTime = 0
-    v.play().catch(() => { showReport.value = true })
-  }
+  // 播感谢成片（停叠化循环，solo 播 ending）
+  playSolo(SRC.ending)
   // 兜底：10 秒后强制出战报
   setTimeout(() => { if (state.value === 'ENDING') showReport.value = true }, 10000)
 }
@@ -484,7 +567,8 @@ function reset() {
   peakTime.value = ''
   clearInterval(countdownTimer)
   countdownTimer = null
-  if (videoEl.value) videoEl.value.pause()
+  stopLoop()
+  if (soloEl.value) soloEl.value.pause()
 }
 
 // ============ 设置齿轮 ============
@@ -522,6 +606,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(rafId)
   clearInterval(countdownTimer)
+  stopLoop()
+  if (soloEl.value) soloEl.value.pause()
   if (micStream) micStream.getTracks().forEach(t => t.stop())
   if (audioCtx) audioCtx.close()
 })
@@ -558,12 +644,16 @@ onBeforeUnmount(() => {
 .vb-mic { font-size: 14px; color: #8f8; margin-left: auto; }
 .vb-mic.err { color: #f66; }
 
-/* 视频区 */
-.video-wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+/* 视频区：三个 video 绝对定位重叠铺满（循环双机 A/B + 单片机 solo） */
+.video-wrap { position: absolute; inset: 0; }
 .stage-video {
+  position: absolute; inset: 0;
   width: 100%; height: 100%; object-fit: contain;
   background: #1a1a2e;
 }
+/* 循环双机叠化：opacity 交叉淡化 0.35s（与 JS 的 FADE 一致）；solo 单片瞬时显隐、层级压过循环机 */
+.loop-video { opacity: 0; transition: opacity .35s linear; }
+.solo-video { z-index: 2; }
 
 /* 左下角萝卜计数 */
 .carrot-counter {
