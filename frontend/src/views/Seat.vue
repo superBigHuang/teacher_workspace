@@ -87,8 +87,12 @@
           <div v-if="!disp.simple" class="seat-pet">
             <!-- 本学期 top3 奖牌（按有效点数降序；简易模式/关闭开关/打印均不显示；层级低于宠物，被宠物遮挡下沿） -->
             <div v-if="disp.fields.medal && seatMedalsOf(s.studentId).length" class="seat-medals">
-              <BadgeIcon v-for="(m, mi) in seatMedalsOf(s.studentId)" :key="mi"
-                :icon="m.icon" :tier="m.tier" :earned="true" :animate="false" :size="28" :name="m.name" />
+              <el-tooltip v-for="(m, mi) in seatMedalsOf(s.studentId)" :key="mi"
+                :content="m.name" placement="top" :show-after="150">
+                <span class="seat-medal-wrap">
+                  <BadgeIcon :icon="m.icon" :tier="m.tier" :earned="true" :animate="false" :size="28" :name="m.name" />
+                </span>
+              </el-tooltip>
             </div>
             <!-- 当日状态：小乌云下雨 / 雪花 / 碎蛋 / 今日之星彩虹 -->
             <span v-if="petOf(s)?.dizzy" class="wx-cloud">☁️<i class="wx-drop">💧</i></span>
@@ -193,16 +197,21 @@
     <!-- 领养弹窗：选种族（内置+自创皮肤）→ 预览 6 阶段 → 起名 -->
     <el-dialog v-model="adoptDlg" title="🥚 领养守护精灵" width="620px" align-center>
       <div class="skin-pick">
-        <div v-for="sk in skins" :key="sk.skinKey" class="skin-card"
-             :class="{ active: adoptSkin === sk.skinKey }" @click="adoptSkin = sk.skinKey">
-          <img :src="skinImg(sk.skinKey, 5)" :alt="sk.name">
-          <div class="skin-card-name">{{ sk.name }}</div>
-          <i class="skin-card-dot" :style="{ background: FX_THEMES[sk.fxTheme]?.beam || '#FFD98A' }"></i>
-          <span v-if="!sk.builtIn" class="skin-card-del" title="删除该自创皮肤" @click.stop="deleteSkin(sk)">🗑</span>
-        </div>
-        <div class="skin-card skin-add" @click="openSkinMaker">
-          <div class="skin-add-plus">➕</div>
-          <div class="skin-card-name">自创宠物</div>
+        <div v-for="g in skinGroups" :key="g.key" class="skin-group">
+          <div class="skin-group-title">{{ g.label }}</div>
+          <div class="skin-group-row">
+            <div v-for="sk in g.list" :key="sk.skinKey" class="skin-card"
+                 :class="{ active: adoptSkin === sk.skinKey }" @click="adoptSkin = sk.skinKey">
+              <img :src="skinImg(sk.skinKey, 5)" :alt="sk.name">
+              <div class="skin-card-name">{{ sk.name }}</div>
+              <i class="skin-card-dot" :style="{ background: FX_THEMES[sk.fxTheme]?.beam || '#FFD98A' }"></i>
+              <span v-if="!sk.builtIn" class="skin-card-del" title="删除该自创皮肤" @click.stop="deleteSkin(sk)">🗑</span>
+            </div>
+            <div v-if="g.add" class="skin-card skin-add" @click="openSkinMaker">
+              <div class="skin-add-plus">➕</div>
+              <div class="skin-card-name">自创宠物</div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="skin-preview">
@@ -647,6 +656,21 @@ function seatMedalsOf(sid) {
   return seatMedalsMap.value[sid] || []
 }
 
+// ==================== 领养弹窗：皮肤按种族分组（龙族 / 仙灵 / 我的自创） ====================
+/** 内置龙族皮肤 skinKey（名字带「龙」）；其余内置归仙灵组 */
+const DRAGON_SKIN_KEYS = new Set(['dragon', 'firedragon', 'catdragon', 'candy', 'forest'])
+const skinGroups = computed(() => {
+  const builtin = skins.value.filter(s => s.builtIn)
+  const dragons = builtin.filter(s => DRAGON_SKIN_KEYS.has(s.skinKey))
+  const fairies = builtin.filter(s => !DRAGON_SKIN_KEYS.has(s.skinKey))
+  const custom = skins.value.filter(s => !s.builtIn)
+  const groups = []
+  if (dragons.length) groups.push({ key: 'dragon', label: '🐲 龙族守护灵', list: dragons })
+  if (fairies.length) groups.push({ key: 'fairy', label: '🐰 仙灵守护灵', list: fairies })
+  groups.push({ key: 'custom', label: '✨ 我的自创', list: custom, add: true })
+  return groups
+})
+
 // ==================== 列组长（👑；零表变更：组长 = committee 表 role='组长'，复用 /duty/committee 查询） ====================
 /** 指派模式：开启后点座位即设/取消该生所在列的组长（与批量评价互斥、禁用拖拽换座） */
 const leaderMode = ref(false)
@@ -801,6 +825,8 @@ async function onSeatUp(e) {
   position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
   display: flex; gap: 2px; z-index: 1; pointer-events: none;
 }
+/* 徽章本身可悬浮（父级穿透不挡座位点击，徽章区重新启用事件以触发 tooltip） */
+.seat-medal-wrap { display: inline-flex; pointer-events: auto; }
 /* 宠物为座位卡最上层（z-index:4）：放大显示，可遮挡奖牌与姓名；状态标记/飘字仍在其上（z-index:5） */
 .seat-pet-img { position: relative; z-index: 4; width: 128px; height: 128px; object-fit: contain; }
 .seat-pet-img.alive { animation: pet-breathe 3.2s ease-in-out infinite; filter: drop-shadow(0 4px 6px rgba(220,160,110,.3)); }
@@ -1066,8 +1092,11 @@ async function onSeatUp(e) {
   100% { transform: scale(1); }
 }
 
-/* ===== 领养弹窗：种族横向选择 + 6 阶段预览 ===== */
-.skin-pick { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 10px; }
+/* ===== 领养弹窗：种族按分类分组列表 + 6 阶段预览 ===== */
+.skin-pick { display: flex; flex-direction: column; gap: 12px; max-height: 280px; overflow-y: auto; padding: 4px 2px 6px; }
+.skin-group { display: flex; flex-direction: column; gap: 8px; }
+.skin-group-title { font-size: 13px; font-weight: 800; color: #b07a5c; letter-spacing: 1px; }
+.skin-group-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .skin-card {
   position: relative; flex: 0 0 86px; border: 2px solid #f0e4d4; border-radius: 14px; background: #fffaf2;
   padding: 8px 4px 6px; text-align: center; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s;

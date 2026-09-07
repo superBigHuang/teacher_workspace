@@ -194,7 +194,7 @@ onUnmounted(() => offRemote?.())
 </script>
 
 <style scoped>
-.pet-page { max-width: 1280px; }
+.pet-page { width: 100%; }
 .spacer { flex: 1; }
 
 /* ===== 领奖台 ===== */
@@ -236,7 +236,7 @@ onUnmounted(() => offRemote?.())
 /* ===== 宠物墙 ===== */
 .wall-head { display: flex; align-items: center; gap: 14px; margin: 4px 0 14px; }
 .wall-title { font-weight: 900; color: #8a5a34; font-size: 16px; }
-.wall-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; }
+.wall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
 .wall-card {
   position: relative; border-radius: 14px; padding: 10px 6px 9px; text-align: center; cursor: pointer;
   background: #fffaf2; border: 2px solid #f0e4d4; transition: transform .15s, border-color .15s;
