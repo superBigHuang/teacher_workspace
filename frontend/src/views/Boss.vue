@@ -41,7 +41,7 @@
       </header>
 
       <div class="boss-body">
-        <!-- 左区：Boss 形象 + HP 条 -->
+        <!-- 左区：Boss 形象 + HP 条（怪兽靠左） -->
         <div class="boss-zone">
           <div ref="emojiEl" class="boss-emoji" :class="{ die: bossDie }">
             <img v-if="isImg && !imgErr" :src="bossImg" class="boss-img" alt="" @error="imgErr = true">
@@ -58,7 +58,7 @@
           <div v-else-if="state.status === 'ESCAPED'" class="boss-over">💨 怪兽逃跑啦</div>
         </div>
 
-        <!-- 右区：题目卡 / 当前答题人+宠物 / 战绩 -->
+        <!-- 中区：题目卡 / 当前答题人 / 战绩（小组模式为小组前三榜） -->
         <div class="info-zone">
           <div class="q-card">
             <div v-if="state.question && state.status === 'ACTIVE'" class="q-cat">
@@ -67,7 +67,6 @@
             <div class="q-text">{{ qText }}</div>
           </div>
           <div class="picker-card" :class="{ pulse: pickPulseOn }">
-            <img v-if="currentPetImg" :src="currentPetImg" class="pk-pet" alt="">
             <span class="pk-label">👉 当前答题</span>
             <span class="pk-name">{{ state.pickedStudentName || (state.mode === 'MANUAL' ? '请点名 👇' : '— 等待 —') }}</span>
           </div>
@@ -75,9 +74,23 @@
             <div class="st-row">
               <span class="st-pass">✅ ×{{ stats.pass || 0 }}</span>
               <span class="st-fail">❌ ×{{ stats.fail || 0 }}</span>
-              <span class="st-kill">🏆 击杀王：{{ stats.killStudentName || '—' }}</span>
+              <span v-if="!isGroup" class="st-kill">🏆 击杀王：{{ stats.killStudentName || '—' }}</span>
+              <span v-else class="st-kill">👥 第 {{ progressRound }} 组 / 共 {{ groupCount }} 组</span>
             </div>
-            <div v-if="stars.length" class="st-stars">
+            <!-- 小组模式：小组分数前三（名次变动有 FLIP 移动，被挤出前三有掉落动画）；其他模式：个人加分前三 -->
+            <template v-if="isGroup">
+              <div class="grp-title">🏅 小组战绩 · 前三</div>
+              <transition-group name="grp" tag="div" class="grp-board">
+                <div v-for="g in groupTop3" :key="g.groupCol" class="grp-item"
+                     :class="{ cur: g.groupCol === currentGroupCol, killed: g.killed }">
+                  <span class="gi-medal">{{ ['🥇', '🥈', '🥉'][g.rank - 1] || g.rank }}</span>
+                  <span class="gi-name">{{ g.name }}</span>
+                  <span v-if="g.killed" class="gi-crown">👑 已击败</span>
+                  <span class="gi-pass">✅ {{ g.pass || 0 }}/{{ g.members }}</span>
+                </div>
+              </transition-group>
+            </template>
+            <div v-else-if="stars.length" class="st-stars">
               <div v-for="(s, i) in stars" :key="s.studentId" class="st-star">
                 <span class="ss-medal">{{ ['🥇', '🥈', '🥉'][i] }}</span>
                 <span class="ss-name">{{ s.name }}</span>
@@ -85,6 +98,13 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- 右区：当前答题学生的宠物（大图，答对时飞向怪兽） -->
+        <div class="pet-zone">
+          <img v-if="currentPetImg" ref="petEl" :src="currentPetImg" class="big-pet" :class="{ pulse: pickPulseOn }" alt="">
+          <div v-else class="big-pet pet-empty">🥚</div>
+          <div class="pet-name">{{ state.pickedStudentName || '等待答题' }}</div>
         </div>
       </div>
     </template>
@@ -155,11 +175,11 @@
           <span :class="'rp-st ' + String(report.status).toLowerCase()">{{ statusLabel(report.status) }}</span>
         </div>
         <div v-if="report.mode === 'GROUP' && report.groups && report.groups.length" class="rp-groups">
-          <div class="rp-sub">🏅 小组排名（前两组组员加分）</div>
-          <div v-for="g in report.groups" :key="g.groupCol" class="rp-group" :class="{ win: g.rank <= 2 }">
-            <span class="rg-rank">{{ ['🥇','🥈','🥉'][g.rank-1] || g.rank }}</span>
+          <div class="rp-sub">🏅 小组战绩（整组答对即击败本组怪兽，组员加分）</div>
+          <div v-for="g in report.groups" :key="g.groupCol" class="rp-group" :class="{ win: g.killed }">
+            <span class="rg-rank">{{ g.killed ? '👑' : (['🥇','🥈','🥉'][g.rank-1] || g.rank) }}</span>
             <span class="rg-name">{{ g.name }}</span>
-            <span class="rg-stat">答对 {{ g.pass || 0 }} / {{ g.members }} 人</span>
+            <span class="rg-stat">答对 {{ g.pass || 0 }} / {{ g.members }} 人{{ g.killed ? ' · 已击败' : '' }}</span>
           </div>
         </div>
         <div class="rp-sub">📝 答题明细</div>
@@ -202,8 +222,8 @@ function goBack() { router.push('/dashboard') }
 // ============ 模式定义 ============
 const MODES = [
   { key: 'RANDOM', name: '随机模式', emoji: '🎲', desc: '随机抽学生，答对答错都自动换人，答对加分' },
-  { key: 'CLASS', name: '班级模式', emoji: '🏫', desc: '全班按顺序挨个答，一轮全对触发「团结就是力量」' },
-  { key: 'GROUP', name: '小组模式', emoji: '👥', desc: '按座位列分组轮答，击杀后前两组组员额外加分' },
+  { key: 'CLASS', name: '班级模式', emoji: '🏫', desc: '按座位一列一列挨个答，人人都叫到，一轮全对触发「团结就是力量」' },
+  { key: 'GROUP', name: '小组模式', emoji: '👥', desc: '一组一怪：按座位列分组，怪血量=组员数，整组答对击杀本组怪、组员加分' },
   { key: 'MANUAL', name: '点名模式', emoji: '👉', desc: '老师手动点名学生，不自动换人' },
 ]
 const MODE_LABEL = Object.fromEntries(MODES.map(m => [m.key, m.name]))
@@ -235,12 +255,22 @@ const hpPct = computed(() => {
 })
 const stats = computed(() => (state.value && state.value.stats) || {})
 const stars = computed(() => stats.value.stars || [])
+const isGroup = computed(() => state.value && state.value.mode === 'GROUP')
+const groupTop3 = computed(() => (state.value && state.value.groupTop3) || [])
+const currentGroupCol = computed(() => {
+  const s = state.value
+  if (!s) return null
+  return s.groupCol ?? (s.progress && s.progress.groupCol) ?? null
+})
+const progressRound = computed(() => (state.value && state.value.progress && state.value.progress.round) || 0)
+const groupCount = computed(() => (state.value && state.value.progress && state.value.progress.groupCount) || 0)
 const stateText = computed(() => statusLabel(state.value && state.value.status))
 const progressText = computed(() => {
   const p = state.value && state.value.progress
   if (!p) return ''
   const mode = state.value.mode
-  if (mode === 'CLASS' || mode === 'GROUP') return `第 ${p.round} 轮 · ${p.done}/${p.total}`
+  if (mode === 'GROUP') return `第 ${p.round} 组 · 组内 ${p.done}/${p.total}`
+  if (mode === 'CLASS') return `第 ${p.round} 轮 · ${p.done}/${p.total}`
   return `已挑战 ${p.done}/${p.total} 人次`
 })
 const qText = computed(() => {
@@ -342,6 +372,7 @@ async function doJudge(result) {
 
 // ============ 状态应用 / 演出 ============
 const emojiEl = ref(null)
+const petEl = ref(null)
 const hurtText = ref('')
 const hurtKey = ref(0)
 const bossDie = ref(false)
@@ -393,12 +424,12 @@ function fireConfetti(big = false) {
 }
 
 /**
- * 宠物攻击飞行：答题学生宠物从姓名卡中心飞向怪兽中心（fixed + transform，~0.7s）。
+ * 宠物攻击飞行：答题学生宠物从右侧大宠物中心飞向怪兽中心（fixed + transform，~0.7s）。
  * 照 EvolutionShow 飞行模式：双 rAF 触发过渡，结束移除 DOM。未领养显示蛋。
  */
 function flyPet(studentId) {
   const p = petMap.value.get(studentId)
-  const src = document.querySelector('.picker-card')
+  const src = petEl.value
   if (!p || !src || !emojiEl.value) return
   const r1 = src.getBoundingClientRect()
   const r2 = emojiEl.value.getBoundingClientRect()
@@ -602,11 +633,27 @@ onBeforeUnmount(() => {
 .bh-state { margin-left: auto; font-size: 18px; padding: 4px 16px; border-radius: 999px; background: rgba(255,193,7,.18); color: #ffc107; }
 
 .boss-body {
-  height: 100%; display: flex; align-items: center; justify-content: center;
-  gap: 90px; padding: 90px 60px 150px; box-sizing: border-box;
+  height: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 36px; padding: 90px 48px 150px; box-sizing: border-box;
 }
-.boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 480px; }
-.info-zone { display: flex; flex-direction: column; gap: 26px; width: 660px; }
+.boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
+.info-zone { display: flex; flex-direction: column; gap: 24px; flex: 1 1 auto; min-width: 0; max-width: 680px; }
+.pet-zone { display: flex; flex-direction: column; align-items: center; gap: 12px; flex: 0 0 auto; width: 280px; }
+.big-pet {
+  height: 240px; width: auto; max-width: 280px; object-fit: contain;
+  filter: drop-shadow(0 18px 40px rgba(0,0,0,.5));
+  animation: petBob 3s ease-in-out infinite;
+}
+.big-pet.pulse { animation: pulse .8s ease; }
+.big-pet.pet-empty { display: flex; align-items: center; justify-content: center; font-size: 160px; }
+@keyframes petBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-16px); }
+}
+.pet-name {
+  font-size: 32px; font-weight: 900; color: #7fd4ff;
+  text-shadow: 0 0 26px rgba(127,212,255,.5); min-height: 40px; text-align: center;
+}
 
 .boss-emoji {
   font-size: 220px; line-height: 1.2;
@@ -677,7 +724,6 @@ onBeforeUnmount(() => {
   40% { transform: scale(1.06); }
   100% { transform: scale(1); }
 }
-.pk-pet { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; filter: drop-shadow(0 4px 10px rgba(0,0,0,.4)); }
 .pk-label { font-size: 26px; color: rgba(255,255,255,.75); }
 .pk-name { font-size: 42px; font-weight: 900; color: #ffc107; text-shadow: 0 0 30px rgba(255,193,7,.4); }
 
@@ -694,6 +740,26 @@ onBeforeUnmount(() => {
 .ss-medal { font-size: 26px; }
 .ss-name { color: rgba(255,255,255,.9); font-weight: 700; }
 .ss-score { color: #69f0ae; font-weight: 800; margin-left: auto; }
+
+/* 小组前三榜：名次变动 FLIP 平滑移动，被挤出前三掉落淡出 */
+.grp-title { font-size: 22px; font-weight: 800; color: #ffc107; }
+.grp-board { position: relative; display: flex; flex-direction: column; gap: 8px; }
+.grp-item {
+  display: flex; align-items: center; gap: 14px; font-size: 24px; font-weight: 800;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+  border-radius: 12px; padding: 10px 18px;
+}
+.grp-item.cur { border-color: #7fd4ff; background: rgba(127,212,255,.16); box-shadow: 0 0 18px rgba(127,212,255,.3); }
+.grp-item.killed { border-color: rgba(255,193,7,.55); }
+.gi-medal { font-size: 26px; }
+.gi-name { color: #fff; }
+.gi-crown { color: #ffc107; font-size: 20px; font-weight: 800; }
+.gi-pass { margin-left: auto; color: #69f0ae; font-weight: 800; }
+.grp-move { transition: transform .6s cubic-bezier(.4,0,.2,1); }
+.grp-enter-active { transition: all .45s ease; }
+.grp-leave-active { transition: all .55s cubic-bezier(.5,0,.7,.4); position: absolute; left: 0; right: 0; }
+.grp-enter-from { opacity: 0; transform: translateY(-28px) scale(.85); }
+.grp-leave-to { opacity: 0; transform: translateY(52px) scale(.8) rotate(-6deg); }
 
 .banner {
   position: absolute; inset: 0; z-index: 30;

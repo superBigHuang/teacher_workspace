@@ -1951,26 +1951,61 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       const unity = (await bossLogs()).some(l => String(l.remark || '').includes('团结'))
       expect(unity).toBe(true)
 
-      // ⑤ 小组场：按座位列轮答至击杀；战报返回小组排名；场次列表含本场
+      // ⑤ 小组场：一组一怪（怪血量=组员数，每人答对掉 1 滴）；按座位列一组组轮答，整组答对击杀本组怪、组员加分；全部组打完结束
+      // 小组=座位列，要求全员有座位；E2E 临时学生默认未排座 → 备份原座次 → 自动排座保证全员有座（跑完还原）
+      const seatSnapshot = ((await (await request.get(API + '/seat/grid', { headers: authHeader() })).json())
+        .data.seats || []).filter(s => s.studentId).map(s => ({ r: s.row, c: s.col, sid: s.studentId }))
+      expect((await apiPost('/seat/auto', {})).code).toBe(200)
       r = await apiPost('/boss/start', { mode: 'GROUP', categoryId: null })
+      expect(r.code).toBe(200)
       const b5 = r.data
-      let cur5 = b5, killed5 = false
-      for (let i = 0; i < 80 && !killed5; i++) {
+      expect(b5.hit_per_pass).toBe(1)                        // 每组每人只掉 1 滴
+      const groupTotal = b5.progress.groupCount             // 小组数=座位列数
+      expect(b5.target_rounds).toBe(groupTotal)
+      expect(b5.hp_total).toBe(b5.progress.total)           // 开局怪血量=第一组人数
+      expect(b5.progress.round).toBe(1)                     // 从第 1 组开始
+      expect(Array.isArray(b5.groupTop3)).toBe(true)
+      let cur5 = b5, killed5 = false, passCount5 = 0
+      for (let i = 0; i < 200 && !killed5; i++) {
         const sid = cur5.pickedStudentId
         if (!sid) break
         const jj = await apiPost('/boss/judge', { bossId: b5.id, studentId: sid, result: 'PASS' })
         expect(jj.code).toBe(200)
         cur5 = jj.data
+        passCount5++
         if (jj.data.killed) killed5 = true
       }
       expect(killed5).toBe(true)
+      expect(cur5.status).toBe('KILLED')
       const rep = await apiGet('/boss/report?bossId=' + b5.id)
       expect(rep.code).toBe(200)
-      expect(rep.data.groups.length).toBeGreaterThan(0)
-      const gpass = rep.data.groups.map(g => g.pass)
+      const groups = rep.data.groups
+      expect(groups.length).toBe(groupTotal)                        // 每个座位列一组
+      const seated = groups.reduce((a, g) => a + g.members, 0)
+      expect(passCount5).toBe(seated)                               // 人人被叫到、各答一次
+      expect(groups.every(g => g.pass === g.members)).toBe(true)    // 每组整组答对
+      expect(groups.every(g => g.killed === true)).toBe(true)       // 每组怪都被击杀
+      const gpass = groups.map(g => g.pass)
       expect(gpass.every((v, i) => i === 0 || gpass[i - 1] >= v)).toBe(true)  // 排名按答对降序
+      expect((await bossLogs()).some(l => String(l.remark || '').includes('优胜小组'))).toBe(true)
       const sess = await apiGet('/boss/sessions')
       expect(sess.data.some(s => s.id === b5.id)).toBe(true)
+      // 还原老师原座次：把每个学生 move 回原座位（临时学生不在快照中，afterAll 删人时级联清座）
+      {
+        const seatsNow = ((await (await request.get(API + '/seat/grid', { headers: authHeader() })).json())
+          .data.seats || []).filter(s => s.studentId)
+        const where = {}
+        seatsNow.forEach(s => { where[s.studentId] = { r: s.row, c: s.col } })
+        for (const t of seatSnapshot) {
+          const p = where[t.sid]
+          if (!p || (p.r === t.r && p.c === t.c)) continue
+          const displacedId = Object.keys(where).find(id => Number(id) !== Number(t.sid) &&
+            where[id].r === t.r && where[id].c === t.c)
+          await apiPost('/seat/move', { fromRow: p.r, fromCol: p.c, toRow: t.r, toCol: t.c })
+          where[t.sid] = { r: t.r, c: t.c }
+          if (displacedId) where[displacedId] = { r: p.r, c: p.c }
+        }
+      }
 
       // ⑥ reset：当日场次/命中清空、BOSS 流水全部撤回（成长值回滚，零污染）
       await apiPost('/boss/reset', {})

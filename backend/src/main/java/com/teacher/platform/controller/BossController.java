@@ -15,13 +15,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * 打怪兽（课堂答题闯关）· 多模式场次化：
  * 一天可多场，每场一只 Boss；四种模式——
  * - RANDOM 随机：答对答错都随机切下一个学生，答对加分；
- * - CLASS 班级：按花名册挨个答题，一轮全班全对触发「团结就是力量」（可累计成就）；
- * - GROUP 小组：按座位表列分组轮答，击杀后组排名前两组组员额外加分；
+ * - CLASS 班级：按座位列顺序一列一列挨个答题，一轮全班全对触发「团结就是力量」（可累计成就）；
+ * - GROUP 小组：一组一怪（座位的一列=一组），怪血量=该组人数，每人答对掉 1 滴，整组全对击杀 →
+ *   该组组员额外加分（无最后一击个人奖、无全班同庆）；未击杀不加分，换下一组新怪；
  * - MANUAL 点名：老师手动选学生，不自动切人。
  *
  * 设计要点：
  * - 题库场（category_id 非空）开局与每次判定后自动抽题；抽背场（category_id 为空）无题，老师口头布置。
- * - 血量 = target_rounds × hit_per_pass；答错不扣血，故打不满一轮不会被秒杀。
+ * - 血量：RANDOM/CLASS = target_rounds × hit_per_pass；GROUP 一组一怪，怪血量=当前组人数（每人 1 滴）。
+ *   答错不扣血，故打不满一轮/一组不会被秒杀。
  * - 当前题/当前答题人/轮次存内存 Map（按 bossId 隔离，单教师场景；重启丢失可由 /state 重进）。
  * - 奖励走 petService.award（biz_ref 幂等防重复发奖）；source=BOSS 触发升级自动置 evolve_pending。
  * - 答案防泄漏：大屏 state/SSE 均不含 answer；手机 /draw 才返回答案。
@@ -162,7 +164,8 @@ public class BossController extends BaseController {
      * 开始一场挑战。
      * 新流程（大屏，带 mode）：每次都新建一场。入参 {mode,title,categoryId,difficulty}。
      * 旧流程（手机 /m，无 mode）：幂等——今日已有 ACTIVE 场直接返回，否则建 RANDOM 场。
-     * 血量：target_rounds（CLASS/GROUP=班级人数，RANDOM/MANUAL=min(人数, boss.random_target 默认20)）× hit_per_pass。
+     * 血量：CLASS/RANDOM/MANUAL = target_rounds × hit_per_pass（CLASS target=班级人数，RANDOM/MANUAL=min(人数, boss.random_target 默认20)）；
+     * GROUP 一组一怪，hit_per_pass=1、target_rounds=小组数，开局血量=第一组人数（换组时重置为下一组人数）。
      * 开局自动：有题库抽第一题；按模式选第一人（MANUAL 不选人等点名）。
      */
     @PostMapping("/start")
@@ -184,16 +187,35 @@ public class BossController extends BaseController {
         List<Map<String, Object>> roster = roster(uid);
         int n = roster.size();
         if (n == 0) return Result.fail("班里还没有学生，先去花名册添加");
-        if ("GROUP".equals(mode) && seatSeq(uid).isEmpty()) {
+        List<Map<String, Object>> seat = seatSeq(uid);
+        if ("GROUP".equals(mode) && seat.isEmpty()) {
             return Result.fail("小组模式需要先在「座次表」排好座位（小组=座位的列）");
+        }
+        if ("GROUP".equals(mode) && seat.size() < n) {
+            return Result.fail("还有学生没排座位，小组模式需要先在座次表给每个学生排好座（小组=座位的列）");
         }
 
         Long categoryId = asLong(body.get("categoryId"));
         Integer difficulty = body.get("difficulty") == null ? null : asInt(body.get("difficulty"));
-        int hitPerPass = settingInt(uid, "boss.hit_per_pass", 10);
-        int targetRounds = ("CLASS".equals(mode) || "GROUP".equals(mode))
-                ? n : Math.min(n, settingInt(uid, "boss.random_target", 20));
-        int hpTotal = targetRounds * hitPerPass;
+        int settingHit = settingInt(uid, "boss.hit_per_pass", 10);
+        int hitPerPass;
+        int targetRounds;
+        int hpTotal;
+        if ("GROUP".equals(mode)) {
+            // 一组一怪：怪血量=当前组人数，每人答对掉 1 滴（hit_per_pass=1），整组全对正好击杀
+            List<Integer> cols = groupCols(uid);
+            hitPerPass = 1;
+            targetRounds = Math.max(cols.size(), 1);
+            hpTotal = groupMembers(uid, cols.get(0)).size();
+        } else if ("CLASS".equals(mode)) {
+            hitPerPass = settingHit;
+            targetRounds = n;
+            hpTotal = targetRounds * hitPerPass;
+        } else {
+            hitPerPass = settingHit;
+            targetRounds = Math.min(n, settingInt(uid, "boss.random_target", 20));
+            hpTotal = targetRounds * hitPerPass;
+        }
 
         String title = str(body.get("title"));
         if (title.isBlank()) {
@@ -221,8 +243,10 @@ public class BossController extends BaseController {
     /**
      * 判定（大屏主操作）：{bossId(可空，缺省今日 ACTIVE), studentId, quizId(抽背空), result: PASS|FAIL}。
      * 写一行 boss_hit（带轮次/小组列）；PASS 加分扣血，FAIL 仅记录。
-     * HP 归零 → KILLED：击杀者 +kill_score、全班 +kill_all_score；GROUP 组排名前二组员 +group_win_score；
-     * CLASS 整轮全对触发团结奖（成就计数来源）。未击杀则自动推进（抽下题/切下一人，MANUAL 等点名）。
+     * HP 归零 → 非 GROUP：KILLED，击杀者 +kill_score、全班 +kill_all_score；CLASS 整轮全对另触发团结奖。
+     * GROUP：一组一怪，当前组整组答对即击杀该组怪 → 仅该组组员 +group_win_score（无最后一击、无全班奖），
+     *        随后换下一组新怪；未击杀（有人答错）不加分直接换组；全部组答完收尾（有组击杀→KILLED，否则→ESCAPED）。
+     * 未结束则自动推进（抽下题/切下一人，MANUAL 等点名）。
      */
     @PostMapping("/judge")
     public Result<Map<String, Object>> judge(@RequestBody Map<String, Object> body) {
@@ -285,38 +309,58 @@ public class BossController extends BaseController {
             boss = bossById(uid, bossId);
             int hpLeft = ((Number) boss.get("hp_left")).intValue();
             if (hpLeft <= 0) {
-                jdbc.update("UPDATE daily_boss SET status='KILLED', hp_left=0, kill_student_id=?, " +
-                                "killed_at=NOW(), ended_at=NOW() WHERE id=? AND status='ACTIVE'",
-                        studentId, bossId);
-                // 击杀者 +kill_score
-                int killScore = settingInt(uid, "boss.kill_score", 10);
-                petService.award(uid, studentId, null, killScore, "BOSS",
-                        "boss:" + bossId + ":kill:" + studentId, "打怪兽击杀");
-                // 全班 +kill_all_score（award 内部自动跳过未领养宠物的学生）
-                int allScore = settingInt(uid, "boss.kill_all_score", 2);
-                for (Map<String, Object> c : roster(uid)) {
-                    Long sid = ((Number) c.get("studentId")).longValue();
-                    petService.award(uid, sid, null, allScore, "BOSS",
-                            "boss:" + bossId + ":ALL:" + sid, "全班击杀同庆");
+                if ("GROUP".equals(mode)) {
+                    // 一组一怪：当前组怪被整组击杀 → 该组组员加分（不发最后一击个人奖、不发全班同庆）
+                    int gc = groupCol != null ? groupCol : -1;
+                    awardGroupKill(uid, bossId, gc);
+                    int curRound = asInt(boss.get("round_no"));
+                    if (curRound >= groupCols(uid).size()) {
+                        // 最后一组击杀 → 整场结束
+                        jdbc.update("UPDATE daily_boss SET status='KILLED', hp_left=0, ended_at=NOW() " +
+                                "WHERE id=? AND status='ACTIVE'", bossId);
+                        sessions.remove(bossId);
+                        data.put("killed", true);
+                        data.put("allDone", true);
+                        boss = bossById(uid, bossId);
+                        remoteHub.dispatch(uid, "boss.killed",
+                                Map.of("bossId", bossId, "allDone", true, "stats", statsOf(uid, boss)));
+                    }
+                    // 非最后一组：保持 ACTIVE，方法末尾 advance 会换下一组的新怪
+                } else {
+                    jdbc.update("UPDATE daily_boss SET status='KILLED', hp_left=0, kill_student_id=?, " +
+                                    "killed_at=NOW(), ended_at=NOW() WHERE id=? AND status='ACTIVE'",
+                            studentId, bossId);
+                    // 击杀者 +kill_score
+                    int killScore = settingInt(uid, "boss.kill_score", 10);
+                    petService.award(uid, studentId, null, killScore, "BOSS",
+                            "boss:" + bossId + ":kill:" + studentId, "打怪兽击杀");
+                    // 全班 +kill_all_score（award 内部自动跳过未领养宠物的学生）
+                    int allScore = settingInt(uid, "boss.kill_all_score", 2);
+                    for (Map<String, Object> c : roster(uid)) {
+                        Long sid = ((Number) c.get("studentId")).longValue();
+                        petService.award(uid, sid, null, allScore, "BOSS",
+                                "boss:" + bossId + ":ALL:" + sid, "全班击杀同庆");
+                    }
+                    boss = bossById(uid, bossId);
+                    sessions.remove(bossId);
+                    String killerName = String.valueOf(jdbc.queryForObject(
+                            "SELECT name FROM student WHERE user_id=? AND id=?", String.class, uid, studentId));
+                    data.put("killed", true);
+                    data.put("killStudentName", killerName);
+                    remoteHub.dispatch(uid, "boss.killed",
+                            Map.of("killStudentName", killerName, "bossId", bossId, "stats", statsOf(uid, boss)));
                 }
-                // 小组模式：组排名前两组组员额外加分
-                if ("GROUP".equals(mode)) awardGroupWins(uid, bossId);
-
-                boss = bossById(uid, bossId);
-                sessions.remove(bossId);
-                String killerName = String.valueOf(jdbc.queryForObject(
-                        "SELECT name FROM student WHERE user_id=? AND id=?", String.class, uid, studentId));
-                data.put("killed", true);
-                data.put("killStudentName", killerName);
-                remoteHub.dispatch(uid, "boss.killed",
-                        Map.of("killStudentName", killerName, "bossId", bossId, "stats", statsOf(uid, boss)));
             }
         }
 
         if ("ACTIVE".equals(bossById(uid, bossId).get("status"))) {
-            advance(uid, bossId);   // 未击杀：自动切题切人
+            advance(uid, bossId);   // 未击杀：自动切题切人（GROUP 末组答完也可能在此收尾）
         }
         boss = bossById(uid, bossId);
+        if (!"ACTIVE".equals(boss.get("status"))) {
+            data.put("killed", "KILLED".equals(boss.get("status")));
+            data.put("allDone", "GROUP".equals(mode));
+        }
         Map<String, Object> state = stateOf(uid, boss);
         data.putAll(state);
         remoteHub.dispatch(uid, "boss.state", state);
@@ -384,7 +428,10 @@ public class BossController extends BaseController {
 
     /**
      * 推进到下一答题轮：题库场先抽下一题；再按模式选下一人。
-     * CLASS/GROUP 本轮人都答完则 round_no+1 进入下一轮；RANDOM 随机且避开上一人；MANUAL 不选人。
+     * CLASS：按座位列序挨个叫（未排座的补在队尾，保证人人被叫到），一轮答完 round_no+1 从头再来。
+     * GROUP：一组一怪——组内按排号挨个叫，整组答完切下一组（换怪、重置血量=下一组人数）；
+     *        全部组答完则收尾（有任意一组击杀→KILLED，否则→ESCAPED）。
+     * RANDOM：随机且避开上一人；MANUAL：不选人等老师点名。
      */
     private void advance(Long uid, Long bossId) {
         Map<String, Object> boss = bossById(uid, bossId);
@@ -404,8 +451,55 @@ public class BossController extends BaseController {
         String pickName = null;
         Integer groupCol = null;
 
-        if ("CLASS".equals(mode) || "GROUP".equals(mode)) {
-            List<Map<String, Object>> seq = "CLASS".equals(mode) ? roster(uid) : seatSeq(uid);
+        if ("GROUP".equals(mode)) {
+            // 一组一怪：round_no=当前是第几组（1 起），group_col=物理列号；怪血量=该组人数，每人答对掉 1 滴
+            List<Integer> cols = groupCols(uid);
+            int gIdx = roundNo - 1;
+            boolean ended = gIdx >= cols.size();
+            if (!ended) {
+                int col = cols.get(gIdx);
+                List<Map<String, Object>> members = groupMembers(uid, col);
+                int answered = countGroupHits(uid, bossId, col);
+                if (answered >= members.size()) {
+                    // 本组每人都答过 → 换下一组新怪（无论击杀与否：未击杀不加分，直接换）
+                    gIdx++;
+                    if (gIdx >= cols.size()) {
+                        ended = true;
+                    } else {
+                        int nextCol = cols.get(gIdx);
+                        List<Map<String, Object>> nextMembers = groupMembers(uid, nextCol);
+                        jdbc.update("UPDATE daily_boss SET round_no=?, hp_total=?, hp_left=? WHERE id=?",
+                                gIdx + 1, nextMembers.size(), nextMembers.size(), bossId);
+                        roundNo = gIdx + 1;
+                        Map<String, Object> first = nextMembers.get(0);
+                        pickId = ((Number) first.get("sid")).longValue();
+                        pickName = String.valueOf(first.get("name"));
+                        groupCol = nextCol;
+                    }
+                } else {
+                    // 组内下一个人（按排号）
+                    Map<String, Object> cur = members.get(answered);
+                    pickId = ((Number) cur.get("sid")).longValue();
+                    pickName = String.valueOf(cur.get("name"));
+                    groupCol = col;
+                }
+            }
+            if (ended) {
+                // 所有组答完收尾：有任意一组整组答对（怪被击杀）→ KILLED，否则 → ESCAPED
+                boolean killedAny = groupRanking(uid, bossId).stream()
+                        .anyMatch(r -> Boolean.TRUE.equals(r.get("killed")));
+                jdbc.update("UPDATE daily_boss SET status=?, ended_at=NOW() WHERE id=? AND status='ACTIVE'",
+                        killedAny ? "KILLED" : "ESCAPED", bossId);
+                sessions.remove(bossId);
+                if (killedAny) {
+                    remoteHub.dispatch(uid, "boss.killed",
+                            Map.of("bossId", bossId, "allDone", true, "stats", statsOf(uid, bossById(uid, bossId))));
+                }
+                return;
+            }
+        } else if ("CLASS".equals(mode)) {
+            // 按座位列序挨个叫，未排座学生补队尾，保证每个学生都被叫到
+            List<Map<String, Object>> seq = classSeq(uid);
             int done = countRoundHits(uid, bossId, roundNo);
             int idx = done;
             if (idx >= seq.size()) {
@@ -418,7 +512,6 @@ public class BossController extends BaseController {
                 Map<String, Object> cur = seq.get(idx);
                 pickId = ((Number) cur.get("studentId")).longValue();
                 pickName = String.valueOf(cur.get("name"));
-                if ("GROUP".equals(mode)) groupCol = cur.get("groupCol") == null ? null : ((Number) cur.get("groupCol")).intValue();
             }
         } else if ("RANDOM".equals(mode)) {
             List<Map<String, Object>> roster = roster(uid);
@@ -459,22 +552,15 @@ public class BossController extends BaseController {
         }
     }
 
-    /** 小组模式击杀奖：按座位列汇总本场 PASS 数，前两组组员各 +group_win_score（biz 幂等）。 */
-    private void awardGroupWins(Long uid, Long bossId) {
-        List<Map<String, Object>> ranking = groupRanking(uid, bossId);
-        if (ranking.isEmpty()) return;
+    /** 小组模式击杀奖：某组怪被整组击杀 → 仅该组组员各 +group_win_score（biz 幂等，无最后一击个人奖）。 */
+    private void awardGroupKill(Long uid, Long bossId, int col) {
+        if (col <= 0) return;
+        List<Map<String, Object>> members = groupMembers(uid, col);
         int winScore = settingInt(uid, "boss.group_win_score", 5);
-        int winners = Math.min(2, ranking.size());
-        for (int i = 0; i < winners; i++) {
-            int col = ((Number) ranking.get(i).get("groupCol")).intValue();
-            List<Map<String, Object>> members = jdbc.queryForList(
-                    "SELECT student_id sid FROM seat_assignment WHERE user_id=? AND class_id=? AND col_no=?",
-                    uid, classId(), col);
-            for (Map<String, Object> m : members) {
-                Long sid = ((Number) m.get("sid")).longValue();
-                petService.award(uid, sid, null, winScore, "BOSS",
-                        "boss:" + bossId + ":group:" + col + ":" + sid, "打怪兽优胜小组");
-            }
+        for (Map<String, Object> m : members) {
+            Long sid = ((Number) m.get("sid")).longValue();
+            petService.award(uid, sid, null, winScore, "BOSS",
+                    "boss:" + bossId + ":group:" + col + ":" + sid, "打怪兽优胜小组");
         }
     }
 
@@ -491,8 +577,12 @@ public class BossController extends BaseController {
                 bossId, bossId, uid, classId());
         int rank = 1;
         for (Map<String, Object> r : rows) {
+            int pass = ((Number) r.get("pass")).intValue();
+            int members = ((Number) r.get("members")).intValue();
             r.put("rank", rank++);
             r.put("name", "第" + r.get("groupCol") + "组");
+            // 整组每人都答对（pass==组员数）即该组怪被击杀
+            r.put("killed", members > 0 && pass >= members);
         }
         return rows;
     }
@@ -515,11 +605,47 @@ public class BossController extends BaseController {
                 uid, classId());
     }
 
+    /** 班级轮答序列：先按座位列序（一列一列叫），未排座学生补在队尾，保证人人被叫到。 */
+    private List<Map<String, Object>> classSeq(Long uid) {
+        List<Map<String, Object>> seq = new ArrayList<>(seatSeq(uid));
+        Set<Long> seated = new HashSet<>();
+        for (Map<String, Object> m : seq) seated.add(((Number) m.get("studentId")).longValue());
+        for (Map<String, Object> r : roster(uid)) {
+            Long sid = ((Number) r.get("studentId")).longValue();
+            if (!seated.contains(sid)) seq.add(r);
+        }
+        return seq;
+    }
+
+    /** 小组列号（物理 col_no）升序；GROUP 模式一组一怪，列即组。 */
+    private List<Integer> groupCols(Long uid) {
+        return jdbc.queryForList(
+                "SELECT DISTINCT col_no FROM seat_assignment WHERE user_id=? AND class_id=? ORDER BY col_no",
+                Integer.class, uid, classId());
+    }
+
+    /** 某组（列）组员，按排号升序；sid=学生 id。 */
+    private List<Map<String, Object>> groupMembers(Long uid, int col) {
+        return jdbc.queryForList(
+                "SELECT sa.student_id sid, s.name FROM seat_assignment sa " +
+                        "JOIN student s ON s.id=sa.student_id AND s.user_id=sa.user_id " +
+                        "WHERE sa.user_id=? AND sa.class_id=? AND sa.col_no=? ORDER BY sa.row_no",
+                uid, classId(), col);
+    }
+
     /** 本场本轮已判定人次 */
     private int countRoundHits(Long uid, Long bossId, int roundNo) {
         Integer c = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM boss_hit WHERE user_id=? AND boss_id=? AND round_no=?",
                 Integer.class, uid, bossId, roundNo);
+        return c == null ? 0 : c;
+    }
+
+    /** 本场某组（列）已判定人次（GROUP 组内进度） */
+    private int countGroupHits(Long uid, Long bossId, int col) {
+        Integer c = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM boss_hit WHERE user_id=? AND boss_id=? AND group_col=?",
+                Integer.class, uid, bossId, col);
         return c == null ? 0 : c;
     }
 
@@ -598,17 +724,30 @@ public class BossController extends BaseController {
                 + ((Number) stats.getOrDefault("fail", 0)).intValue();
         String mode = str(boss.get("mode")).toUpperCase();
         int roundNo = s != null ? s.roundNo() : asInt(boss.get("round_no"));
-        int done;
-        int total;
-        if ("CLASS".equals(mode) || "GROUP".equals(mode)) {
-            int seqSize = "CLASS".equals(mode) ? roster(uid).size() : seatSeq(uid).size();
-            done = "ACTIVE".equals(boss.get("status")) ? countRoundHits(uid, bossId, roundNo) : 0;
-            total = seqSize;
+        boolean active = "ACTIVE".equals(boss.get("status"));
+        Map<String, Object> progress;
+        if ("GROUP".equals(mode)) {
+            // 一组一怪：round=第几组，done/total=当前组内已答/组员数；另带小组前三榜
+            List<Integer> cols = groupCols(uid);
+            int gIdx = cols.isEmpty() ? 0 : Math.max(0, Math.min(roundNo - 1, cols.size() - 1));
+            int col = cols.isEmpty() ? 0 : cols.get(gIdx);
+            int members = col == 0 ? 0 : groupMembers(uid, col).size();
+            int gDone = active && col != 0 ? countGroupHits(uid, bossId, col) : 0;
+            progress = new HashMap<>();
+            progress.put("done", gDone);
+            progress.put("total", Math.max(members, 1));
+            progress.put("round", gIdx + 1);
+            progress.put("groupCount", cols.size());
+            progress.put("groupCol", col);
+            List<Map<String, Object>> ranking = groupRanking(uid, bossId);
+            state.put("groupTop3", ranking.size() > 3 ? new ArrayList<>(ranking.subList(0, 3)) : ranking);
+        } else if ("CLASS".equals(mode)) {
+            int done = active ? countRoundHits(uid, bossId, roundNo) : 0;
+            progress = Map.of("done", done, "total", Math.max(classSeq(uid).size(), 1), "round", roundNo);
         } else {
-            done = totalDone;
-            total = asInt(boss.get("target_rounds"));
+            progress = Map.of("done", totalDone, "total", Math.max(asInt(boss.get("target_rounds")), 1), "round", roundNo);
         }
-        state.put("progress", Map.of("done", done, "total", Math.max(total, 1), "round", roundNo));
+        state.put("progress", progress);
         return state;
     }
 
