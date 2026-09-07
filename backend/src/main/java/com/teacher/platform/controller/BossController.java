@@ -367,6 +367,36 @@ public class BossController extends BaseController {
         return Result.ok(data);
     }
 
+    /**
+     * 主动结束本场（老师收兵）：仅 ACTIVE 可结束。
+     * 小组模式已有整组击杀 → KILLED（保留击败战绩）；其余情况怪兽未死 → ESCAPED（逃跑）。结束后可看战报。
+     */
+    @PostMapping("/end")
+    public Result<Map<String, Object>> end(@RequestBody Map<String, Object> body) {
+        Long uid = uid();
+        Long bossId = asLong(body.get("bossId"));
+        Map<String, Object> boss = bossId == null ? activeBoss(uid) : bossById(uid, bossId);
+        if (boss == null) return Result.fail("没有进行中的怪兽，先新建一场");
+        bossId = ((Number) boss.get("id")).longValue();
+        if (!"ACTIVE".equals(boss.get("status"))) return Result.ok(stateOf(uid, boss));
+        String mode = str(boss.get("mode")).toUpperCase();
+        boolean killedAny = "GROUP".equals(mode)
+                && groupRanking(uid, bossId).stream().anyMatch(r -> Boolean.TRUE.equals(r.get("killed")));
+        String endStatus = killedAny ? "KILLED" : "ESCAPED";
+        jdbc.update("UPDATE daily_boss SET status=?, " +
+                        "hp_left=CASE WHEN ?='KILLED' THEN 0 ELSE hp_left END, ended_at=NOW() " +
+                        "WHERE id=? AND status='ACTIVE'", endStatus, endStatus, bossId);
+        sessions.remove(bossId);
+        boss = bossById(uid, bossId);
+        Map<String, Object> state = stateOf(uid, boss);
+        remoteHub.dispatch(uid, "boss.state", state);
+        if (killedAny) {
+            remoteHub.dispatch(uid, "boss.killed",
+                    Map.of("bossId", bossId, "allDone", true, "stats", statsOf(uid, boss)));
+        }
+        return Result.ok(state);
+    }
+
     // ---------- 手机 /m 旧流程保留（出题 / 抽人，作用于今日 ACTIVE 场） ----------
 
     /** 出题（手机端）：返回题 + 答案（仅手机展示），写入内存态当前题；大屏 state 不含答案。 */

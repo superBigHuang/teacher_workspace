@@ -58,8 +58,8 @@
           <div v-else-if="state.status === 'ESCAPED'" class="boss-over">💨 怪兽逃跑啦</div>
         </div>
 
-        <!-- 中区：题目卡 / 当前答题人 / 战绩（小组模式为小组前三榜） -->
-        <div class="info-zone">
+        <!-- 中区：题目卡 / 当前答题人 / 战绩（小组模式为小组前三榜，点名模式为座位表） -->
+        <div class="info-zone" :class="{ 'manual-zone': isManual }">
           <div class="q-card">
             <div v-if="state.question && state.status === 'ACTIVE'" class="q-cat">
               {{ state.categoryIcon || '📖' }} {{ state.categoryName }}
@@ -68,9 +68,27 @@
           </div>
           <div class="picker-card" :class="{ pulse: pickPulseOn }">
             <span class="pk-label">👉 当前答题</span>
-            <span class="pk-name">{{ state.pickedStudentName || (state.mode === 'MANUAL' ? '请点名 👇' : '— 等待 —') }}</span>
+            <span class="pk-name">{{ activeStudentName || (isManual ? '请点座位选人 👇' : '— 等待 —') }}</span>
+            <span v-if="isManual" class="pk-counts">✅ {{ stats.pass || 0 }} · ❌ {{ stats.fail || 0 }}</span>
           </div>
-          <div class="stats-card">
+          <!-- 点名模式：座位表平铺点人（蓝=选中 绿=答对 红=答错），不显示分数排行 -->
+          <div v-if="isManual" class="seat-board">
+            <div v-if="!seatGrid" class="seat-loading">座位表加载中…（请先在座次表排好座位）</div>
+            <div v-else class="seat-grid"
+                 :style="{ gridTemplateColumns: seatColTpl, gridTemplateRows: `repeat(${seatGrid.rows}, minmax(48px, 1fr))` }">
+              <div v-for="a in seatAisles" :key="'al' + a" class="seat-aisle"
+                   :style="{ gridRow: `1 / ${seatGrid.rows + 1}`, gridColumn: aisleCol(a) }"></div>
+              <template v-for="r in seatGrid.rows" :key="'r' + r">
+                <div v-for="c in seatGrid.cols" :key="r + '-' + c" class="seat-tile"
+                     :class="tileClass(r, c)"
+                     :style="{ gridRow: r, gridColumn: dispCol(c) }"
+                     @click="pickSeat(r, c)">
+                  <span class="stl-name">{{ (seatAt(r, c) && seatAt(r, c).name) || '空' }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div v-else class="stats-card">
             <div class="st-row">
               <span class="st-pass">✅ ×{{ stats.pass || 0 }}</span>
               <span class="st-fail">❌ ×{{ stats.fail || 0 }}</span>
@@ -100,11 +118,10 @@
           </div>
         </div>
 
-        <!-- 右区：当前答题学生的宠物（大图，答对时飞向怪兽） -->
+        <!-- 右区：当前答题学生的宠物（大图，答对时飞向怪兽）；未选人/未领养显示云小龙蛋 -->
         <div class="pet-zone">
-          <img v-if="currentPetImg" ref="petEl" :src="currentPetImg" class="big-pet" :class="{ pulse: pickPulseOn }" alt="">
-          <div v-else class="big-pet pet-empty">🥚</div>
-          <div class="pet-name">{{ state.pickedStudentName || '等待答题' }}</div>
+          <img ref="petEl" :src="currentPetImg" class="big-pet" :class="{ pulse: pickPulseOn }" alt="">
+          <div class="pet-name">{{ activeStudentName || '等待答题' }}</div>
         </div>
       </div>
     </template>
@@ -112,12 +129,9 @@
     <!-- 底部操作条：进行中=答对/答错（点名模式带下拉）；结束=战报/返回 -->
     <div v-if="view === 'battle' && state" class="boss-ctrl">
       <template v-if="state.status === 'ACTIVE'">
-        <select v-if="state.mode === 'MANUAL'" v-model="form.manualId" class="boss-select mini">
-          <option :value="null">点名下拉…</option>
-          <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
         <button class="ctrl-btn pass" @click="doJudge('PASS')" :disabled="busy || judgeDisabled">✅ 答对 +5</button>
         <button class="ctrl-btn fail" @click="doJudge('FAIL')" :disabled="busy || judgeDisabled">❌ 未答对</button>
+        <button class="ctrl-btn end" @click="doEnd" :disabled="busy">🏁 结束本场</button>
       </template>
       <template v-else>
         <button class="ctrl-btn draw" @click="openReport(state.id)">📊 查看战报</button>
@@ -148,6 +162,10 @@
             <option v-for="c in cats" :key="c.id" :value="c.id">{{ (c.icon || '📚') + ' ' + c.name }}</option>
           </select>
         </label>
+        <div class="fld quiz-link-row">
+          <span></span>
+          <button type="button" class="quiz-link" @click="quizDlg = true">📚 没有想要的题库？点这里新增题目 / 管理题库 →</button>
+        </div>
         <label v-if="form.categoryId" class="fld"><span>难度</span>
           <select v-model="form.difficulty" class="fld-input">
             <option :value="null">全部难度</option>
@@ -204,17 +222,21 @@
         <div class="banner-text">{{ killName }} 击杀！</div>
       </div>
     </transition>
+
+    <!-- 题库管理快捷弹窗（与宠物园页同一个组件） -->
+    <QuizDlg :model-value="quizDlg" @update:model-value="onQuizDlgChange" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import confetti from 'canvas-confetti'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
-import { petImgOf } from '../composables/usePets'
+import { petImgOf, setSkinCache } from '../composables/usePets'
+import QuizDlg from '../components/quiz/QuizDlg.vue'
 
 const router = useRouter()
 function goBack() { router.push('/dashboard') }
@@ -236,6 +258,7 @@ const sessions = ref([])
 const state = ref(null)
 const report = ref(null)
 const showCreate = ref(false)
+const quizDlg = ref(false)        // 新建战场里的题库管理快捷弹窗
 const cats = ref([])
 const students = ref([])
 const petMap = ref(new Map())      // studentId -> 宠物行（/pet/pets）
@@ -256,6 +279,24 @@ const hpPct = computed(() => {
 const stats = computed(() => (state.value && state.value.stats) || {})
 const stars = computed(() => stats.value.stars || [])
 const isGroup = computed(() => state.value && state.value.mode === 'GROUP')
+const isManual = computed(() => state.value && state.value.mode === 'MANUAL')
+/** 当前答题学生：点名模式取手动选中（座位表点选），其他模式取后端自动抽到的人 */
+const activeStudentId = computed(() => {
+  const s = state.value
+  if (!s) return null
+  return s.mode === 'MANUAL' ? form.value.manualId : s.pickedStudentId
+})
+const activeStudentName = computed(() => {
+  const s = state.value
+  if (!s) return ''
+  if (s.mode === 'MANUAL') {
+    const id = form.value.manualId
+    if (!id) return ''
+    const st = students.value.find(x => x.id === id)
+    return st ? st.name : ''
+  }
+  return s.pickedStudentName || ''
+})
 const groupTop3 = computed(() => (state.value && state.value.groupTop3) || [])
 const currentGroupCol = computed(() => {
   const s = state.value
@@ -281,12 +322,9 @@ const qText = computed(() => {
   if (s.question) return s.question
   return s.category_id ? '⏳ 准备中…' : '🎤 抽背中：老师口头出题，学生作答'
 })
-/** 当前答题学生的宠物图（未领养显示蛋） */
-const currentPetImg = computed(() => {
-  const sid = state.value && state.value.pickedStudentId
-  if (!sid) return ''
-  return petImgOf(petMap.value.get(sid))
-})
+/** 当前答题学生的宠物图；未选人/未领养统一显示云小龙蛋图（不用 emoji 蛋） */
+const currentPetImg = computed(() =>
+  petImgOf(activeStudentId.value ? petMap.value.get(activeStudentId.value) : null))
 /** 判定按钮是否禁用：自动模式需已抽到人；点名模式需选中人 */
 const judgeDisabled = computed(() => {
   const s = state.value
@@ -338,8 +376,10 @@ async function enterState(s) {
   report.value = null
   imgErr.value = false
   bossDie.value = false
+  seatResult.value = {}
   killPlayed = s.status === 'KILLED'
   if (s.status === 'KILLED') killName.value = (s.stats && s.stats.killStudentName) || '勇士'
+  if (s.mode === 'MANUAL') loadSeatGrid()
 }
 function backToList() {
   view.value = 'list'
@@ -358,16 +398,36 @@ async function doJudge(result) {
   const s = state.value
   const isManual = s.mode === 'MANUAL'
   const studentId = isManual ? form.value.manualId : s.pickedStudentId
-  if (!studentId) { ElMessage.warning(isManual ? '请先在下拉点名' : '还没轮到学生答题'); return }
+  if (!studentId) { ElMessage.warning(isManual ? '请先在座位表点选学生' : '还没轮到学生答题'); return }
   busy.value = true
   try {
     const r = await http.post('/boss/judge', {
       bossId: s.id, studentId, quizId: s.currentQuizId || null, result,
     })
-    if (result === 'PASS') flyPet(studentId)   // 宠物飞出攻击
+    if (isManual) seatResult.value = { ...seatResult.value, [studentId]: result }
     form.value.manualId = null
+    if (result === 'PASS') {
+      // 宠物飞出攻击，命中瞬间再落状态（扣血/抖怪/切人），打击感与碰撞同步
+      flyPet(studentId, () => { applyState(r); busy.value = false })
+    } else {
+      applyState(r)
+      busy.value = false
+    }
+  } catch (e) { ElMessage.error(e?.message || '判定失败'); busy.value = false }
+}
+
+// ============ 主动结束本场 ============
+async function doEnd() {
+  if (!state.value || busy.value) return
+  try {
+    await ElMessageBox.confirm('确定结束本场战斗吗？结束后可查看战报；未击败的怪兽按逃跑计。',
+      '🏁 结束本场', { confirmButtonText: '结束本场', cancelButtonText: '再打会儿', type: 'warning' })
+  } catch { return }
+  try {
+    const r = await http.post('/boss/end', { bossId: state.value.id })
     applyState(r)
-  } catch (e) { ElMessage.error(e?.message || '判定失败') } finally { busy.value = false }
+    ElMessage.success('本场已结束')
+  } catch (e) { ElMessage.error(e?.message || '操作失败') }
 }
 
 // ============ 状态应用 / 演出 ============
@@ -383,6 +443,7 @@ let killPlayed = false
 let offCmd = null
 let pollTimer = null
 let pickTimer = null
+let hurtTimer = null
 
 function applyState(s) {
   if (!s) return
@@ -399,10 +460,14 @@ function applyState(s) {
 function triggerHurt(dmg) {
   hurtKey.value++
   hurtText.value = dmg
-  if (emojiEl.value) {
-    emojiEl.value.classList.remove('hurt')
-    void emojiEl.value.offsetWidth
-    emojiEl.value.classList.add('hurt')
+  const el = emojiEl.value
+  if (el) {
+    el.classList.remove('hurt')
+    void el.offsetWidth
+    el.classList.add('hurt')
+    // 受击动画播完后移除 hurt，恢复待机摆动（否则 hurt 常驻会覆盖待机动画）
+    clearTimeout(hurtTimer)
+    hurtTimer = setTimeout(() => el.classList.remove('hurt'), 520)
   }
 }
 function playKilled(name) {
@@ -424,35 +489,122 @@ function fireConfetti(big = false) {
 }
 
 /**
- * 宠物攻击飞行：答题学生宠物从右侧大宠物中心飞向怪兽中心（fixed + transform，~0.7s）。
- * 照 EvolutionShow 飞行模式：双 rAF 触发过渡，结束移除 DOM。未领养显示蛋。
+ * 宠物攻击飞行：答题学生宠物从右侧大宠物中心飞向怪兽中心（fixed + transform，~0.55s）。
+ * 命中瞬间在怪兽处生成 💥 爆炸 + 冲击波环，并回调 onHit 落状态（扣血/抖怪/切人）。
+ * 无法飞行（无宠物数据/元素缺失）时直接回调，避免按钮卡死。
  */
-function flyPet(studentId) {
+function flyPet(studentId, onHit) {
+  const land = () => onHit && onHit()
   const p = petMap.value.get(studentId)
   const src = petEl.value
-  if (!p || !src || !emojiEl.value) return
+  if (!p || !src || !emojiEl.value) { land(); return }
   const r1 = src.getBoundingClientRect()
   const r2 = emojiEl.value.getBoundingClientRect()
+  const sx = r1.left + r1.width / 2, sy = r1.top + r1.height / 2
+  const tx = r2.left + r2.width / 2, ty = r2.top + r2.height / 2
+  const size = 120
   const img = document.createElement('img')
   img.src = petImgOf(p)
-  const size = 64
-  img.style.cssText = `position:fixed;left:${r1.left + r1.width / 2 - size / 2}px;top:${r1.top + r1.height / 2 - size / 2}px;` +
+  // 原位大宠物同步淡出（跳出去），命中后随新人恢复
+  src.style.transition = 'opacity .18s ease-in'
+  src.style.opacity = '0'
+  img.style.cssText = `position:fixed;left:${sx - size / 2}px;top:${sy - size / 2}px;` +
     `width:${size}px;height:${size}px;object-fit:contain;z-index:9998;pointer-events:none;` +
-    `transition:transform .7s cubic-bezier(.45,-.15,.35,1.15),opacity .7s;will-change:transform;`
+    `transition:transform .55s cubic-bezier(.5,-.18,.3,1.22);will-change:transform;` +
+    `filter:drop-shadow(0 0 18px rgba(255,225,120,.9));`
   document.body.appendChild(img)
-  const dx = (r2.left + r2.width / 2) - (r1.left + r1.width / 2)
-  const dy = (r2.top + r2.height / 2) - (r1.top + r1.height / 2)
+  const dx = tx - sx, dy = ty - sy
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    img.style.transform = `translate(${dx}px,${dy}px) scale(1.25) rotate(20deg)`
+    img.style.transform = `translate(${dx}px,${dy}px) scale(1.55) rotate(28deg)`
   }))
-  setTimeout(() => img.remove(), 720)
+  setTimeout(() => {
+    spawnHit(tx, ty); img.remove()
+    src.style.transition = ''; src.style.opacity = ''
+    land()
+  }, 560)
 }
 
+/**
+ * 命中特效：怪兽中心 💥 弹出 + 一圈冲击波扩散（fixed，~0.6s 后移除）。
+ */
+function spawnHit(x, y) {
+  const boom = document.createElement('div')
+  boom.textContent = '💥'
+  boom.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:9997;pointer-events:none;` +
+    `font-size:44px;line-height:1;transform:translate(-50%,-50%) scale(.3);opacity:1;` +
+    `transition:transform .45s cubic-bezier(.2,1.5,.4,1),opacity .45s;`
+  document.body.appendChild(boom)
+  const ring = document.createElement('div')
+  ring.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:36px;height:36px;margin:-18px 0 0 -18px;` +
+    `border-radius:50%;border:7px solid rgba(255,210,90,.95);box-sizing:border-box;z-index:9996;` +
+    `pointer-events:none;transition:transform .55s ease-out,opacity .55s;`
+  document.body.appendChild(ring)
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    boom.style.transform = 'translate(-50%,-50%) scale(1.9)'
+    boom.style.opacity = '0'
+    ring.style.transform = 'scale(7)'
+    ring.style.opacity = '0'
+  }))
+  setTimeout(() => { boom.remove(); ring.remove() }, 620)
+}
+
+// ============ 点名模式：座位表点人 ============
+const seatGrid = ref(null)        // /seat/grid 返回 {rows,cols,aisles,seats}
+const seatResult = ref({})        // studentId -> 'PASS' | 'FAIL'（本场本地点名结果，控制座位绿/红）
+
+async function loadSeatGrid() {
+  try { seatGrid.value = await http.get('/seat/grid') } catch { seatGrid.value = null }
+}
+/** 逻辑列 -> 显示列（过道占列）；过道显示列号 */
+const seatAisles = computed(() => seatGrid.value?.aisles || [])
+function dispCol(c) { return c + seatAisles.value.filter(a => a < c).length }
+function aisleCol(a) { return a + seatAisles.value.filter(x => x <= a).length }
+function seatAt(r, c) {
+  const g = seatGrid.value
+  if (!g) return null
+  return g.seats.find(s => s.row === r && s.col === c) || null
+}
+/** 座位色块：空座 / 选中蓝 / 答对绿 / 答错红 / 待点默认 */
+function tileClass(r, c) {
+  const s = seatAt(r, c)
+  if (!s || !s.studentId) return ['empty']
+  if (form.value.manualId === s.studentId) return ['sel']
+  const res = seatResult.value[s.studentId]
+  if (res === 'PASS') return ['ok']
+  if (res === 'FAIL') return ['bad']
+  return ['idle']
+}
+function pickSeat(r, c) {
+  const s = seatAt(r, c)
+  if (!s || !s.studentId) return
+  form.value.manualId = s.studentId
+  pickPulseOn.value = true
+  clearTimeout(pickTimer)
+  pickTimer = setTimeout(() => { pickPulseOn.value = false }, 800)
+}
+/** CSS grid 列模板：座位列 1fr，过道列固定窄宽 */
+const seatColTpl = computed(() => {
+  const g = seatGrid.value
+  if (!g) return ''
+  const aisleSet = new Set(seatAisles.value.map(a => aisleCol(a)))
+  const total = g.cols + seatAisles.value.length
+  const tpl = []
+  for (let dc = 1; dc <= total; dc++) tpl.push(aisleSet.has(dc) ? '20px' : 'minmax(0,1fr)')
+  return tpl.join(' ')
+})
+
 // ============ 下拉数据 ============
+async function loadCats() {
+  try { cats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) }
+  catch { /* 空仍可抽背 */ }
+}
+/** 题库管理弹窗：关闭后刷新题库下拉（可能新增了分类/题目） */
+async function onQuizDlgChange(v) {
+  quizDlg.value = v
+  if (!v) await loadCats()
+}
 async function loadOptions() {
-  if (!cats.value.length) {
-    try { cats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) } catch { /* 空仍可抽背 */ }
-  }
+  if (!cats.value.length) await loadCats()
   if (!students.value.length) {
     try { students.value = await http.get('/roster/students') } catch { /* 点名不可用 */ }
   }
@@ -461,6 +613,7 @@ async function loadOptions() {
       const d = await http.get('/pet/pets')
       const list = d?.pets || d || []
       petMap.value = new Map(list.map(p => [p.studentId, p]))
+      setSkinCache(await http.get('/pet/skins'))   // 皮肤图映射，缺了会回退云龙
     } catch { /* 无宠物数据不阻断 */ }
   }
 }
@@ -495,6 +648,7 @@ onBeforeUnmount(() => {
   stopRemote()
   clearInterval(pollTimer)
   clearTimeout(pickTimer)
+  clearTimeout(hurtTimer)
 })
 </script>
 
@@ -615,6 +769,19 @@ onBeforeUnmount(() => {
 .ctrl-btn.pick { background: linear-gradient(135deg, #f0a030, #ef7d4d); }
 .ctrl-btn.pass { background: linear-gradient(135deg, #2e9e5b, #43b581); }
 .ctrl-btn.fail { background: linear-gradient(135deg, #d05060, #e06a7a); }
+.ctrl-btn.end {
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.3);
+  font-size: 20px; padding: 12px 24px;
+}
+.ctrl-btn.end:hover:not(:disabled) { background: rgba(255,255,255,.26); }
+
+/* 新建弹窗里的题库快捷入口 */
+.quiz-link-row { margin-top: -6px; margin-bottom: 14px; }
+.quiz-link {
+  border: none; background: none; cursor: pointer; text-align: left;
+  font-size: 14px; font-weight: 700; color: #7c5cbf; padding: 4px 2px;
+}
+.quiz-link:hover { color: #9b6dd6; text-decoration: underline; }
 .boss-select {
   font-size: 20px; padding: 12px 16px; border-radius: 12px;
   border: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.14); color: #fff; cursor: pointer;
@@ -633,22 +800,23 @@ onBeforeUnmount(() => {
 .bh-state { margin-left: auto; font-size: 18px; padding: 4px 16px; border-radius: 999px; background: rgba(255,193,7,.18); color: #ffc107; }
 
 .boss-body {
-  height: 100%; display: flex; align-items: center; justify-content: space-between;
-  gap: 36px; padding: 90px 48px 150px; box-sizing: border-box;
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  gap: 40px; padding: 84px 56px 132px; box-sizing: border-box;
+  max-width: 1760px; margin: 0 auto;
 }
-.boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
-.info-zone { display: flex; flex-direction: column; gap: 24px; flex: 1 1 auto; min-width: 0; max-width: 680px; }
+.boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; width: 460px; }
+.info-zone { display: flex; flex-direction: column; justify-content: center; gap: 16px; flex: 1 1 auto; min-width: 0; max-width: 660px; }
 .pet-zone { display: flex; flex-direction: column; align-items: center; gap: 12px; flex: 0 0 auto; width: 280px; }
 .big-pet {
   height: 240px; width: auto; max-width: 280px; object-fit: contain;
   filter: drop-shadow(0 18px 40px rgba(0,0,0,.5));
-  animation: petBob 3s ease-in-out infinite;
+  transform-origin: 50% 92%;
+  animation: petIdle 2s ease-in-out infinite;
 }
 .big-pet.pulse { animation: pulse .8s ease; }
-.big-pet.pet-empty { display: flex; align-items: center; justify-content: center; font-size: 160px; }
-@keyframes petBob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-16px); }
+@keyframes petIdle {
+  0%, 100% { transform: translateY(0) rotate(-5deg) scale(1); }
+  50% { transform: translateY(-26px) rotate(5deg) scale(1.05); }
 }
 .pet-name {
   font-size: 32px; font-weight: 900; color: #7fd4ff;
@@ -658,25 +826,30 @@ onBeforeUnmount(() => {
 .boss-emoji {
   font-size: 220px; line-height: 1.2;
   filter: drop-shadow(0 24px 48px rgba(0,0,0,.55));
-  animation: swing 2.6s ease-in-out infinite;
+  transform-origin: 50% 92%;
+  animation: bossIdle 2.3s ease-in-out infinite;
 }
-.boss-img { height: 360px; width: auto; max-width: 480px; object-fit: contain; display: block; }
-@keyframes swing {
-  0%, 100% { transform: rotate(-5deg) translateY(0); }
-  50% { transform: rotate(5deg) translateY(-14px); }
+.boss-img { height: 360px; width: auto; max-width: 460px; object-fit: contain; display: block; }
+@keyframes bossIdle {
+  0%, 100% { transform: rotate(-4deg) translateY(0) scale(1); }
+  25%      { transform: rotate(3deg) translateY(-12px) scale(1.02); }
+  50%      { transform: rotate(4deg) translateY(-20px) scale(1.035); }
+  75%      { transform: rotate(-3deg) translateY(-9px) scale(1.02); }
 }
-.boss-emoji.hurt { animation: shake .45s ease; }
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-18px) rotate(-4deg); }
-  40% { transform: translateX(16px) rotate(4deg); }
-  60% { transform: translateX(-12px); }
-  80% { transform: translateX(10px); }
+.boss-emoji.hurt { animation: bossHurt .5s ease; }
+@keyframes bossHurt {
+  0%   { transform: translateX(0) rotate(0) scale(1); }
+  15%  { transform: translateX(-24px) rotate(-7deg) scale(1.06); }
+  30%  { transform: translateX(22px) rotate(7deg) scale(1.04); }
+  45%  { transform: translateX(-17px) rotate(-5deg); }
+  60%  { transform: translateX(13px) rotate(3deg); }
+  78%  { transform: translateX(-7px); }
+  100% { transform: translateX(0) rotate(0) scale(1); }
 }
 .boss-emoji.die { animation: bossDie .7s ease forwards; }
 @keyframes bossDie {
-  0% { transform: scale(1); opacity: 1; }
-  100% { transform: scale(2.6); opacity: 0; }
+  0%   { transform: scale(1) rotate(0); opacity: 1; }
+  100% { transform: scale(2.6) rotate(12deg); opacity: 0; }
 }
 
 .hurt-num {
@@ -708,15 +881,15 @@ onBeforeUnmount(() => {
 .q-card {
   background: rgba(0,0,0,.45); backdrop-filter: blur(12px);
   border: 1px solid rgba(255,255,255,.15); border-radius: 20px;
-  padding: 30px 38px; min-height: 170px;
-  display: flex; flex-direction: column; justify-content: center; gap: 12px;
+  padding: 22px 30px; min-height: 132px;
+  display: flex; flex-direction: column; justify-content: center; gap: 10px;
 }
-.q-cat { font-size: 22px; color: #ffc107; font-weight: 700; }
-.q-text { font-size: 38px; font-weight: 800; line-height: 1.4; }
+.q-cat { font-size: 20px; color: #ffc107; font-weight: 700; }
+.q-text { font-size: 32px; font-weight: 800; line-height: 1.35; }
 
 .picker-card {
   display: flex; align-items: center; gap: 20px;
-  background: rgba(0,0,0,.45); border-radius: 16px; padding: 18px 32px;
+  background: rgba(0,0,0,.45); border-radius: 16px; padding: 13px 28px;
 }
 .picker-card.pulse { animation: pulse .8s ease; }
 @keyframes pulse {
@@ -724,42 +897,74 @@ onBeforeUnmount(() => {
   40% { transform: scale(1.06); }
   100% { transform: scale(1); }
 }
-.pk-label { font-size: 26px; color: rgba(255,255,255,.75); }
-.pk-name { font-size: 42px; font-weight: 900; color: #ffc107; text-shadow: 0 0 30px rgba(255,193,7,.4); }
+.pk-label { font-size: 22px; color: rgba(255,255,255,.75); }
+.pk-name { font-size: 34px; font-weight: 900; color: #ffc107; text-shadow: 0 0 30px rgba(255,193,7,.4); }
 
 .stats-card {
-  background: rgba(0,0,0,.45); border-radius: 16px; padding: 20px 32px;
-  display: flex; flex-direction: column; gap: 14px;
+  background: rgba(0,0,0,.45); border-radius: 16px; padding: 14px 26px;
+  display: flex; flex-direction: column; gap: 10px;
 }
-.st-row { display: flex; gap: 36px; font-size: 28px; font-weight: 700; }
+.st-row { display: flex; flex-wrap: wrap; gap: 12px 26px; font-size: 23px; font-weight: 700; }
 .st-pass { color: #69f0ae; }
 .st-fail { color: #ff8a80; }
 .st-kill { color: #ffc107; }
-.st-stars { display: flex; flex-direction: column; gap: 6px; }
-.st-star { display: flex; align-items: center; gap: 14px; font-size: 24px; }
-.ss-medal { font-size: 26px; }
+.st-stars { display: flex; flex-direction: column; gap: 4px; }
+.st-star { display: flex; align-items: center; gap: 12px; font-size: 20px; }
+.ss-medal { font-size: 22px; }
 .ss-name { color: rgba(255,255,255,.9); font-weight: 700; }
 .ss-score { color: #69f0ae; font-weight: 800; margin-left: auto; }
 
 /* 小组前三榜：名次变动 FLIP 平滑移动，被挤出前三掉落淡出 */
-.grp-title { font-size: 22px; font-weight: 800; color: #ffc107; }
-.grp-board { position: relative; display: flex; flex-direction: column; gap: 8px; }
+.grp-title { font-size: 18px; font-weight: 800; color: #ffc107; }
+.grp-board { position: relative; display: flex; flex-direction: column; gap: 6px; }
 .grp-item {
-  display: flex; align-items: center; gap: 14px; font-size: 24px; font-weight: 800;
+  display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 800;
   background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
-  border-radius: 12px; padding: 10px 18px;
+  border-radius: 12px; padding: 7px 14px;
 }
 .grp-item.cur { border-color: #7fd4ff; background: rgba(127,212,255,.16); box-shadow: 0 0 18px rgba(127,212,255,.3); }
 .grp-item.killed { border-color: rgba(255,193,7,.55); }
-.gi-medal { font-size: 26px; }
+.gi-medal { font-size: 22px; }
 .gi-name { color: #fff; }
-.gi-crown { color: #ffc107; font-size: 20px; font-weight: 800; }
+.gi-crown { color: #ffc107; font-size: 17px; font-weight: 800; }
 .gi-pass { margin-left: auto; color: #69f0ae; font-weight: 800; }
 .grp-move { transition: transform .6s cubic-bezier(.4,0,.2,1); }
 .grp-enter-active { transition: all .45s ease; }
 .grp-leave-active { transition: all .55s cubic-bezier(.5,0,.7,.4); position: absolute; left: 0; right: 0; }
 .grp-enter-from { opacity: 0; transform: translateY(-28px) scale(.85); }
 .grp-leave-to { opacity: 0; transform: translateY(52px) scale(.8) rotate(-6deg); }
+
+/* 点名模式：座位表平铺点人（蓝=选中 绿=答对 红=答错） */
+.manual-zone { max-width: 780px; }
+.pk-counts { margin-left: auto; font-size: 22px; font-weight: 800; color: rgba(255,255,255,.85); }
+.seat-board {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px; padding: 14px 16px; box-sizing: border-box;
+}
+.seat-loading { margin: auto; color: rgba(255,255,255,.6); font-size: 20px; text-align: center; }
+.seat-grid { flex: 1 1 auto; display: grid; gap: 8px; align-content: stretch; }
+.seat-aisle { background: transparent; }
+.seat-tile {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 12px; border: 2px solid; font-weight: 800; cursor: pointer;
+  transition: transform .12s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease;
+  min-height: 48px; padding: 4px; box-sizing: border-box;
+}
+.stl-name { font-size: 21px; line-height: 1.1; text-align: center; word-break: break-all; }
+.seat-tile.idle { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.24); color: #fff; }
+.seat-tile.idle:hover { transform: translateY(-3px); background: rgba(255,255,255,.20); border-color: rgba(255,255,255,.5); }
+.seat-tile.sel {
+  background: linear-gradient(135deg, #2f80ed, #4aa8ff); border-color: #7fd4ff; color: #fff;
+  box-shadow: 0 0 24px rgba(74,168,255,.65); transform: scale(1.06);
+}
+.seat-tile.ok { background: linear-gradient(135deg, #2e9e5b, #43b581); border-color: rgba(105,240,174,.85); color: #fff; }
+.seat-tile.bad { background: linear-gradient(135deg, #d05060, #e06a7a); border-color: rgba(255,138,128,.85); color: #fff; }
+.seat-tile.empty {
+  background: transparent; border: 2px dashed rgba(255,255,255,.14);
+  color: rgba(255,255,255,.22); cursor: default;
+}
+.seat-tile.empty .stl-name { font-size: 15px; font-weight: 700; }
 
 .banner {
   position: absolute; inset: 0; z-index: 30;
