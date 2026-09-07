@@ -83,11 +83,39 @@ public class DataInitializer implements CommandLineRunner {
             System.out.println("[migrate] subject.is_mine 跳过：" + e.getMessage());
         }
 
+        // 打怪兽多模式·场次化：daily_boss 由"每天一只"升级为"一天可多场"，补模式/标题/题库/轮次/目标轮次/结束时间；
+        // boss_hit 补轮次与小组列（小组=座位表的列）。老库重启幂等加列，存量行 mode 默认 RANDOM。
+        ensureColumn("daily_boss", "mode",
+                "mode VARCHAR(16) DEFAULT 'RANDOM' COMMENT 'RANDOM/CLASS/GROUP/MANUAL'");
+        ensureColumn("daily_boss", "title", "title VARCHAR(64)");
+        ensureColumn("daily_boss", "category_id", "category_id BIGINT NULL COMMENT '题库分类；NULL=抽背'");
+        ensureColumn("daily_boss", "difficulty", "difficulty INT NULL");
+        ensureColumn("daily_boss", "round_no", "round_no INT DEFAULT 1");
+        ensureColumn("daily_boss", "target_rounds", "target_rounds INT DEFAULT 20");
+        ensureColumn("daily_boss", "ended_at", "ended_at DATETIME NULL");
+        ensureColumn("boss_hit", "round_no", "round_no INT DEFAULT 1");
+        ensureColumn("boss_hit", "group_col", "group_col INT NULL COMMENT '小组模式座位列号'");
+        rebuildBossIndex();
+
         // 多用户唯一约束：去掉旧的单列唯一，改为 (user_id, 业务键)
         rebuildUniqueIndex("student", "uk_stuno", "uk_user_stuno", "user_id, stu_no");
         rebuildUniqueIndex("duty_config", "day_of_week", "uk_user_day", "user_id, day_of_week");
         rebuildUniqueIndex("card_config", "card_key", "uk_user_card", "user_id, card_key");
         rebuildSettingPrimaryKey();
+    }
+
+    /** daily_boss 去掉 (user_id,boss_date) 唯一键（一天可多场），改普通索引 idx_boss_user_date */
+    private void rebuildBossIndex() {
+        try {
+            if (indexExists("daily_boss", "uk_boss")) {
+                jdbc.execute("ALTER TABLE daily_boss DROP INDEX uk_boss");
+            }
+            if (!indexExists("daily_boss", "idx_boss_user_date")) {
+                jdbc.execute("ALTER TABLE daily_boss ADD KEY idx_boss_user_date (user_id, boss_date)");
+            }
+        } catch (Exception e) {
+            System.out.println("[migrate] daily_boss 索引跳过：" + e.getMessage());
+        }
     }
 
     /** 若指定表缺少某列则 ALTER 增加；通过 JDBC 元数据判断，保证可重复执行 */
@@ -262,6 +290,9 @@ public class DataInitializer implements CommandLineRunner {
                         "AUTO", "PET_SHOP", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":3},{\"tier\":\"GOLD\",\"min\":5}]}", 1},
                 {"成绩前列", "最近一次考试总分排名：🥉前 10 / 🥈前 5 / 🥇前 3（并列同名次）", "medal-1st", "BRONZE",
                         "AUTO", "RANK_TOP", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":10},{\"tier\":\"SILVER\",\"min\":5},{\"tier\":\"GOLD\",\"min\":3}]}", 1},
+                // 打怪兽班级模式联动 AUTO
+                {"团结就是力量", "打怪兽·班级模式一轮全对：🥉1 次 / 🥈3 次 / 🥇5 次（全班齐心协力一轮击败怪兽）", "sparkles", "BRONZE",
+                        "AUTO", "CLASS_UNITY", "{\"tiers\":[{\"tier\":\"BRONZE\",\"min\":1},{\"tier\":\"SILVER\",\"min\":3},{\"tier\":\"GOLD\",\"min\":5}]}", 1},
                 // 手动模板 MANUAL（开箱即授，不扫描、不进大满贯）
                 {"体育之星", "体育表现突出：校运会/体育课/体育竞赛获奖", "sports-medal", "SILVER",
                         "MANUAL", null, null, 0},

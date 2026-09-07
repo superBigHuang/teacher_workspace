@@ -477,30 +477,43 @@ CREATE TABLE IF NOT EXISTS push_log (
   KEY idx_push_biz (user_id, channel, biz_ref)
 );
 
--- 每日打怪兽（per-user；每天一只，uk(user_id, boss_date) 保证当日唯一；次日懒判 ESCAPED 不落库）
+-- 打怪兽场次（per-user；一天可多场，故去掉 (user_id,boss_date) 唯一键改普通索引；
+-- mode=RANDOM/CLASS/GROUP/MANUAL 四模式；category_id 为 NULL 表示无题库抽背；
+-- round_no 当前轮次、target_rounds 目标轮次（血量=target_rounds×hit_per_pass，答错不扣血故打不满一轮不会被秒）；
+-- status=ACTIVE 进行中 / KILLED 已击杀 / ESCAPED 跨天未结束（懒判不落库）；ended_at 结束时间）
 CREATE TABLE IF NOT EXISTS daily_boss (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL DEFAULT 1,
   boss_date DATE NOT NULL,
   boss_name VARCHAR(32),
   boss_emoji VARCHAR(8),
+  mode VARCHAR(16) DEFAULT 'RANDOM' COMMENT 'RANDOM/CLASS/GROUP/MANUAL',
+  title VARCHAR(64),
+  category_id BIGINT NULL COMMENT '题库分类；NULL=无题库抽背',
+  difficulty INT NULL,
   hp_total INT DEFAULT 100,
   hp_left INT DEFAULT 100,
   hit_per_pass INT DEFAULT 10,
+  round_no INT DEFAULT 1,
+  target_rounds INT DEFAULT 20,
   kill_student_id BIGINT NULL,
   killed_at DATETIME NULL,
+  ended_at DATETIME NULL,
   status VARCHAR(8) DEFAULT 'ACTIVE' COMMENT 'ACTIVE/KILLED/ESCAPED',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_boss (user_id, boss_date)
+  KEY idx_boss_user_date (user_id, boss_date)
 );
 
--- 打怪兽命中明细（per-user；一次判定一行，biz_ref 唯一键防止重复发奖）
+-- 打怪兽命中明细（per-user；一次判定一行，biz_ref 唯一键防止重复发奖；
+-- round_no 该判定所在轮次、group_col 小组模式的座位列号（小组=座位表的列）；quiz_id 可空=抽背无题）
 CREATE TABLE IF NOT EXISTS boss_hit (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL DEFAULT 1,
   boss_id BIGINT NOT NULL,
   student_id BIGINT NOT NULL,
   quiz_id BIGINT NULL,
+  round_no INT DEFAULT 1,
+  group_col INT NULL,
   result VARCHAR(8) COMMENT 'PASS/FAIL',
   damage INT DEFAULT 0,
   biz_ref VARCHAR(64),

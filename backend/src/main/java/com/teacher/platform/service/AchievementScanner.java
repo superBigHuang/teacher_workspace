@@ -214,6 +214,7 @@ public class AchievementScanner {
         Set<Long> petAdopted = (Set<Long>) petData.get("petAdopted");
         Map<Long, Integer> gradCount = (Map<Long, Integer>) petData.get("gradCount");
         Map<Long, Integer> shopCount = (Map<Long, Integer>) petData.get("shopCount");
+        Map<Long, Integer> unityCount = (Map<Long, Integer>) petData.get("unityCount");
 
         switch (ruleType) {
             case "PERFECT_ATTENDANCE": {
@@ -291,6 +292,12 @@ public class AchievementScanner {
                 int c = shopCount == null ? 0 : shopCount.getOrDefault(sid, 0);
                 String t = tierOf(tiers, c, false);
                 return new Eval(t != null, t, countProgress(tiers, c, "本学期小店兑换 " + c + " 次", "次"));
+            }
+            case "CLASS_UNITY": {
+                // 团结就是力量：打怪兽班级模式整轮全对场次（去重 bossId），累计可升档
+                int u = unityCount == null ? 0 : unityCount.getOrDefault(sid, 0);
+                String t = tierOf(tiers, u, false);
+                return new Eval(t != null, t, countProgress(tiers, u, "全班团结全胜 " + u + " 次", "次"));
             }
             case "COLLECTOR":
                 return new Eval(false, null, "集齐本学期全部启用的自动成就即可获得");
@@ -457,6 +464,11 @@ public class AchievementScanner {
                         "AND created_at BETWEEN ? AND CONCAT(?,' 23:59:59') GROUP BY student_id", uid, start, end));
         data.put("shopCount", countByStudent(
                 "SELECT student_id sid, COUNT(*) c FROM pet_exchange WHERE user_id=? " +
+                        "AND created_at BETWEEN ? AND CONCAT(?,' 23:59:59') GROUP BY student_id", uid, start, end));
+        // 团结就是力量：本学期打怪兽班级模式整轮全对的去重场次次数（biz_ref=boss:{bossId}:unity:{round}:{sid}）
+        data.put("unityCount", countByStudent(
+                "SELECT student_id sid, COUNT(DISTINCT SUBSTRING_INDEX(SUBSTRING_INDEX(biz_ref,':',2),':',-1)) c " +
+                        "FROM pet_log WHERE user_id=? AND source='BOSS' AND biz_ref LIKE 'boss:%:unity:%' " +
                         "AND created_at BETWEEN ? AND CONCAT(?,' 23:59:59') GROUP BY student_id", uid, start, end));
         return data;
     }

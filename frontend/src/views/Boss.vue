@@ -1,29 +1,42 @@
 <template>
   <div class="boss-stage">
-    <!-- 无 Boss：等待老师在大屏直接开始 -->
-    <div v-if="!state" class="wait-cover">
-      <div class="wait-emoji">👾</div>
-      <div class="wait-title">今日还没有怪兽</div>
-      <div class="wait-sub">选好题库范围，点「开始挑战」——学生答题通关扣血，HP 归零全班庆祝加分</div>
-      <div class="start-form">
-        <select v-model="form.categoryId" class="boss-select">
-          <option :value="null">全部分类</option>
-          <option v-for="c in cats" :key="c.id" :value="c.id">{{ (c.icon || '📚') + ' ' + c.name }}</option>
-        </select>
-        <select v-model="form.difficulty" class="boss-select">
-          <option :value="null">全部难度</option>
-          <option :value="1">简单</option>
-          <option :value="2">中等</option>
-          <option :value="3">困难</option>
-        </select>
-        <button class="ctrl-btn primary big" @click="doStart" :disabled="busy">👾 开始挑战</button>
+    <!-- ============ 战场大厅：新建 / 继续 / 战报 ============ -->
+    <div v-if="view === 'list'" class="lobby">
+      <button class="boss-exit" @click="goBack">← 返回工作台</button>
+      <div class="lobby-head">
+        <div class="lobby-title">👾 打怪兽</div>
+        <button class="ctrl-btn primary" @click="openCreate">➕ 新建战场</button>
+      </div>
+      <div class="session-list">
+        <div v-for="s in sessions" :key="s.id" class="session-card">
+          <div class="sc-main">
+            <img v-if="isImgCode(s.bossEmoji)" :src="monsterImg(s.bossEmoji)" class="sc-monster" alt="">
+            <div v-else class="sc-monster emoji">{{ s.bossEmoji || '👾' }}</div>
+            <div class="sc-info">
+              <div class="sc-title">{{ s.title }}</div>
+              <div class="sc-meta">
+                <span class="sc-mode">{{ modeLabel(s.mode) }}</span>
+                <span class="sc-pf">✅{{ s.passCnt }} ❌{{ s.failCnt }}</span>
+                <span class="sc-time">{{ fmtTime(s.createdAt) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="sc-side">
+            <span class="sc-status" :class="String(s.status).toLowerCase()">{{ statusLabel(s.status) }}</span>
+            <button v-if="s.status === 'ACTIVE'" class="ctrl-btn primary small" @click="enterBattle(s.id)">继续战斗</button>
+            <button v-else class="ctrl-btn small ghost" @click="openReport(s.id)">查看战报</button>
+          </div>
+        </div>
+        <div v-if="!sessions.length" class="lobby-empty">还没有战场，点「新建战场」开始吧</div>
       </div>
     </div>
 
+    <!-- ============ 战斗大屏 ============ -->
     <template v-else>
       <header class="boss-header">
-        <span class="bh-badge">👾 每日打怪兽</span>
-        <span class="bh-name">{{ state.boss_name }}</span>
+        <span class="bh-badge">👾 {{ state.modeCn || '打怪兽' }}</span>
+        <span class="bh-name">{{ state.title }}</span>
+        <span class="bh-round" v-if="state.status === 'ACTIVE'">{{ progressText }}</span>
         <span class="bh-state">{{ stateText }}</span>
       </header>
 
@@ -42,21 +55,21 @@
             </div>
           </div>
           <div v-if="state.status === 'KILLED'" class="boss-over">💀 已被 {{ killName || stats.killStudentName || '勇士' }} 击杀！</div>
-          <div v-else-if="state.status === 'ESCAPED'" class="boss-over">💨 怪兽逃跑啦，明天再来！</div>
+          <div v-else-if="state.status === 'ESCAPED'" class="boss-over">💨 怪兽逃跑啦</div>
         </div>
 
-        <!-- 右区：题目卡（无答案）/ 当前答题人 / 今日战绩 -->
+        <!-- 右区：题目卡 / 当前答题人+宠物 / 战绩 -->
         <div class="info-zone">
           <div class="q-card">
             <div v-if="state.question && state.status === 'ACTIVE'" class="q-cat">
               {{ state.categoryIcon || '📖' }} {{ state.categoryName }}
             </div>
             <div class="q-text">{{ qText }}</div>
-            <div v-if="state.status === 'ACTIVE' && !state.question" class="q-hint">答案只在老师手机上显示</div>
           </div>
           <div class="picker-card" :class="{ pulse: pickPulseOn }">
+            <img v-if="currentPetImg" :src="currentPetImg" class="pk-pet" alt="">
             <span class="pk-label">👉 当前答题</span>
-            <span class="pk-name">{{ state.pickedStudentName || '— 等待抽人 —' }}</span>
+            <span class="pk-name">{{ state.pickedStudentName || (state.mode === 'MANUAL' ? '请点名 👇' : '— 等待 —') }}</span>
           </div>
           <div class="stats-card">
             <div class="st-row">
@@ -76,27 +89,94 @@
       </div>
     </template>
 
-    <!-- 大屏操作条：老师直接在大屏点（出题/抽人/判定），不用手机遥控；答案不显示，老师听答判定 -->
-    <div v-if="state && state.status === 'ACTIVE'" class="boss-ctrl">
-      <button class="ctrl-btn draw" @click="doDraw" :disabled="busy">🎲 出题</button>
-      <div class="ctrl-group">
-        <button class="ctrl-btn pick" @click="doPick('RANDOM')" :disabled="busy">🎲 随机抽人</button>
-        <select v-model="form.studentId" class="boss-select mini"
-                @change="form.studentId && doPick('MANUAL')">
+    <!-- 底部操作条：进行中=答对/答错（点名模式带下拉）；结束=战报/返回 -->
+    <div v-if="view === 'battle' && state" class="boss-ctrl">
+      <template v-if="state.status === 'ACTIVE'">
+        <select v-if="state.mode === 'MANUAL'" v-model="form.manualId" class="boss-select mini">
           <option :value="null">点名下拉…</option>
           <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
-      </div>
-      <div class="ctrl-group">
-        <button class="ctrl-btn pass" @click="doJudge('PASS')"
-                :disabled="busy || !curQuizId || !state.pickedStudentId">✅ 答对 +5</button>
-        <button class="ctrl-btn fail" @click="doJudge('FAIL')"
-                :disabled="busy || !curQuizId || !state.pickedStudentId">❌ 未答对</button>
+        <button class="ctrl-btn pass" @click="doJudge('PASS')" :disabled="busy || judgeDisabled">✅ 答对 +5</button>
+        <button class="ctrl-btn fail" @click="doJudge('FAIL')" :disabled="busy || judgeDisabled">❌ 未答对</button>
+      </template>
+      <template v-else>
+        <button class="ctrl-btn draw" @click="openReport(state.id)">📊 查看战报</button>
+        <button class="ctrl-btn pick" @click="backToList">← 返回战场列表</button>
+      </template>
+    </div>
+
+    <!-- 返回：战斗中回大厅（进行中场不丢失，可从列表继续） -->
+    <button v-if="view === 'battle'" class="boss-exit" @click="backToList">← 战场列表</button>
+
+    <!-- ============ 新建战场弹窗 ============ -->
+    <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false">
+      <div class="modal">
+        <div class="modal-title">➕ 新建战场</div>
+        <div class="mode-grid">
+          <div v-for="m in MODES" :key="m.key" class="mode-card" :class="{ on: form.mode === m.key }" @click="pickMode(m.key)">
+            <div class="mode-emoji">{{ m.emoji }}</div>
+            <div class="mode-name">{{ m.name }}</div>
+            <div class="mode-desc">{{ m.desc }}</div>
+          </div>
+        </div>
+        <label class="fld"><span>标题</span>
+          <input v-model="form.title" class="fld-input" placeholder="给这场起个名">
+        </label>
+        <label class="fld"><span>题库</span>
+          <select v-model="form.categoryId" class="fld-input">
+            <option :value="null">🎤 抽背（无题，老师口头布置）</option>
+            <option v-for="c in cats" :key="c.id" :value="c.id">{{ (c.icon || '📚') + ' ' + c.name }}</option>
+          </select>
+        </label>
+        <label v-if="form.categoryId" class="fld"><span>难度</span>
+          <select v-model="form.difficulty" class="fld-input">
+            <option :value="null">全部难度</option>
+            <option :value="1">简单</option>
+            <option :value="2">中等</option>
+            <option :value="3">困难</option>
+          </select>
+        </label>
+        <div class="modal-tip" v-if="form.mode === 'GROUP'">👥 小组按座位表的「列」划分，请先在座次表排好座位</div>
+        <div class="modal-actions">
+          <button class="m-btn" @click="showCreate = false">取消</button>
+          <button class="m-btn primary" :disabled="busy || !form.mode" @click="doStart">👾 开始挑战</button>
+        </div>
       </div>
     </div>
 
-    <!-- 返回工作台（菜单进入的出口；等待态/战斗态都显示，z 高于 header 与播报） -->
-    <button class="boss-exit" @click="goBack">← 返回工作台</button>
+    <!-- ============ 战报弹窗 ============ -->
+    <div v-if="report" class="modal-mask" @click.self="report = null">
+      <div class="modal wide">
+        <div class="modal-title">📊 战报 · {{ report.title }}</div>
+        <div class="rp-meta">
+          <span>{{ report.modeCn }}</span>
+          <span>✅ {{ report.stats.pass || 0 }} · ❌ {{ report.stats.fail || 0 }}</span>
+          <span v-if="report.stats.killStudentName">🏆 击杀王：{{ report.stats.killStudentName }}</span>
+          <span :class="'rp-st ' + String(report.status).toLowerCase()">{{ statusLabel(report.status) }}</span>
+        </div>
+        <div v-if="report.mode === 'GROUP' && report.groups && report.groups.length" class="rp-groups">
+          <div class="rp-sub">🏅 小组排名（前两组组员加分）</div>
+          <div v-for="g in report.groups" :key="g.groupCol" class="rp-group" :class="{ win: g.rank <= 2 }">
+            <span class="rg-rank">{{ ['🥇','🥈','🥉'][g.rank-1] || g.rank }}</span>
+            <span class="rg-name">{{ g.name }}</span>
+            <span class="rg-stat">答对 {{ g.pass || 0 }} / {{ g.members }} 人</span>
+          </div>
+        </div>
+        <div class="rp-sub">📝 答题明细</div>
+        <div class="rp-hits">
+          <div v-for="h in report.hits" :key="h.id" class="rp-hit">
+            <span class="rh-r">{{ h.result === 'PASS' ? '✅' : '❌' }}</span>
+            <span class="rh-name">{{ h.studentName }}</span>
+            <span class="rh-q">{{ h.question || '🎤 抽背' }}</span>
+            <span v-if="h.groupCol" class="rh-g">第{{ h.groupCol }}组</span>
+          </div>
+          <div v-if="!report.hits.length" class="lobby-empty">本场还没有答题记录</div>
+        </div>
+        <div class="modal-actions">
+          <button class="m-btn primary" @click="report = null">关闭</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 击杀全屏播报 -->
     <transition name="bounce">
@@ -114,114 +194,40 @@ import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import confetti from 'canvas-confetti'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
+import { petImgOf } from '../composables/usePets'
 
 const router = useRouter()
-/** 退出大屏回工作台（菜单 /boss 为全屏独立页，需自带出口） */
 function goBack() { router.push('/dashboard') }
 
-// ============ 大屏直接操作（老师在大屏电脑点点点，不用手机遥控） ============
-/** 分类/学生下拉数据 */
+// ============ 模式定义 ============
+const MODES = [
+  { key: 'RANDOM', name: '随机模式', emoji: '🎲', desc: '随机抽学生，答对答错都自动换人，答对加分' },
+  { key: 'CLASS', name: '班级模式', emoji: '🏫', desc: '全班按顺序挨个答，一轮全对触发「团结就是力量」' },
+  { key: 'GROUP', name: '小组模式', emoji: '👥', desc: '按座位列分组轮答，击杀后前两组组员额外加分' },
+  { key: 'MANUAL', name: '点名模式', emoji: '👉', desc: '老师手动点名学生，不自动换人' },
+]
+const MODE_LABEL = Object.fromEntries(MODES.map(m => [m.key, m.name]))
+const modeLabel = k => MODE_LABEL[k] || '挑战'
+const statusLabel = s => ({ ACTIVE: '进行中', KILLED: '已击败', ESCAPED: '已逃跑' }[s] || s)
+
+// ============ 视图与数据 ============
+const view = ref('list')           // list | battle
+const sessions = ref([])
+const state = ref(null)
+const report = ref(null)
+const showCreate = ref(false)
 const cats = ref([])
 const students = ref([])
-/** 开始与出题共用条件 + 点名下拉选中 */
-const form = ref({ categoryId: null, difficulty: null, studentId: null })
-/** 当前题 id（draw 响应；答案不落大屏、不渲染，judge 时回传 quizId） */
-const curQuizId = ref(null)
-/** 操作进行中（防连点） */
+const petMap = ref(new Map())      // studentId -> 宠物行（/pet/pets）
+const form = ref({ mode: 'RANDOM', title: '', categoryId: null, difficulty: null, manualId: null })
 const busy = ref(false)
 
-async function loadOptions() {
-  if (!cats.value.length) {
-    try { cats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) }
-    catch { /* 下拉为空仍可全部分类开局 */ }
-  }
-  if (!students.value.length) {
-    try { students.value = await http.get('/roster/students') } catch { /* 点名不可用时仍可随机抽人 */ }
-  }
-}
-
-/** 开始今日挑战（幂等：已存在则返回现有 Boss） */
-async function doStart() {
-  if (busy.value) return
-  busy.value = true
-  try {
-    const r = await http.post('/boss/start', { categoryId: form.value.categoryId, difficulty: form.value.difficulty })
-    applyState(r)
-    ElMessage.success('今日挑战开始！')
-  } catch (e) { ElMessage.error(e?.message || '开始失败') } finally { busy.value = false }
-}
-
-/** 出题：响应含答案但大屏只存 id（题目经 loadToday/SSE 显示，答案不渲染） */
-async function doDraw() {
-  if (busy.value) return
-  busy.value = true
-  try {
-    const r = await http.post('/boss/draw', { categoryId: form.value.categoryId, difficulty: form.value.difficulty })
-    curQuizId.value = r.id
-    await loadToday()
-  } catch (e) { ElMessage.error(e?.message || '出题失败') } finally { busy.value = false }
-}
-
-/** 抽人：RANDOM 班主任班随机；MANUAL 用下拉选中学生（选中即抽） */
-async function doPick(mode) {
-  if (busy.value) return
-  const studentId = mode === 'MANUAL' ? form.value.studentId : null
-  if (mode === 'MANUAL' && !studentId) { ElMessage.warning('请先在下拉选择学生'); return }
-  busy.value = true
-  try {
-    const r = await http.post('/boss/pick-student', { mode, studentId })
-    if (state.value) { state.value.pickedStudentId = r.studentId; state.value.pickedStudentName = r.name }
-  } catch (e) { ElMessage.error(e?.message || '抽人失败') } finally { busy.value = false }
-}
-
-/** 判定：需已出题(curQuizId)且已抽人；PASS/FAIL 由后端结算扣血/发奖，响应带回整体状态 */
-async function doJudge(result) {
-  if (busy.value) return
-  const studentId = state.value && state.value.pickedStudentId
-  if (!curQuizId.value) { ElMessage.warning('请先出题'); return }
-  if (!studentId) { ElMessage.warning('请先抽人'); return }
-  busy.value = true
-  try {
-    const r = await http.post('/boss/judge', { studentId, quizId: curQuizId.value, result })
-    curQuizId.value = null   // 一题一判，消费后清空
-    applyState(r)
-    if (r.killed) ElMessage.success((r.killStudentName || '勇士') + ' 击杀怪兽！🎉')
-  } catch (e) { ElMessage.error(e?.message || '判定失败') } finally { busy.value = false }
-}
-
-/** 今日 Boss 整体状态（/boss/today：boss 全量 + 当前题 + 答题人 + stats；不含答案——防大屏泄题） */
-const state = ref(null)
-/** 怪兽图片加载失败标记（回退 emoji 👾）；新 Boss 时重置 */
+// ============ 怪兽图 / 进度 / 文案 ============
+const isImgCode = e => typeof e === 'string' && /^[1-9]$/.test(String(e).trim())
+const monsterImg = e => `/boss/monster${String(e).trim()}.png`
+const isImg = computed(() => isImgCode(state.value && state.value.boss_emoji))
+const bossImg = computed(() => monsterImg(state.value.boss_emoji))
 const imgErr = ref(false)
-/** Boss emoji 元素引用（扣血抖动动画手动重播用） */
-const emojiEl = ref(null)
-/** 扣血飘字文案与重播 key（如 -10） */
-const hurtText = ref('')
-const hurtKey = ref(0)
-/** Boss 爆炸动画（击杀后保持消失态，直到新 Boss 出现） */
-const bossDie = ref(false)
-/** 击杀者姓名 + 全屏播报开关 */
-const killName = ref('')
-const killBanner = ref(false)
-/** 抽人高亮脉冲 */
-const pickPulseOn = ref(false)
-
-/** 击杀演出只播一次（SSE boss.killed 与轮询发现 KILLED 双通道防重） */
-let killPlayed = false
-/** 首次加载完成标记（首次进入已 KILLED 不补播演出） */
-let inited = false
-let offCmd = null
-let pollTimer = null
-let pickTimer = null
-
-/** 是否为图片怪兽：boss_emoji 存图片编号 "1"~"4"（列仅 VARCHAR(8)）；历史 emoji 字符按文本渲染 */
-const isImg = computed(() => {
-  const e = state.value && state.value.boss_emoji
-  return typeof e === 'string' && /^[1-9]$/.test(e.trim())
-})
-/** 图片怪兽地址：编号拼 /boss/monster{n}.png（frontend/public/boss/） */
-const bossImg = computed(() => `/boss/monster${String(state.value.boss_emoji).trim()}.png`)
-/** HP 百分比（0~100） */
 const hpPct = computed(() => {
   const s = state.value
   if (!s || !s.hp_total) return 0
@@ -229,45 +235,128 @@ const hpPct = computed(() => {
 })
 const stats = computed(() => (state.value && state.value.stats) || {})
 const stars = computed(() => stats.value.stars || [])
-/** 头部状态角标文案 */
-const stateText = computed(() => {
-  const st = state.value && state.value.status
-  if (st === 'KILLED') return '已击败'
-  if (st === 'ESCAPED') return '已逃跑'
-  return '挑战中'
+const stateText = computed(() => statusLabel(state.value && state.value.status))
+const progressText = computed(() => {
+  const p = state.value && state.value.progress
+  if (!p) return ''
+  const mode = state.value.mode
+  if (mode === 'CLASS' || mode === 'GROUP') return `第 ${p.round} 轮 · ${p.done}/${p.total}`
+  return `已挑战 ${p.done}/${p.total} 人次`
 })
-/** 题目卡文案：进行中显示题目（无题显示等待），结束态显示收尾文案 */
 const qText = computed(() => {
   const s = state.value
   if (!s) return ''
-  if (s.status === 'KILLED') return '🎉 今日怪兽已被击败，挑战结束！'
-  if (s.status === 'ESCAPED') return '💨 怪兽逃跑啦，等老师开新挑战'
-  return s.question || '⏳ 等待老师出题…'
+  if (s.status === 'KILLED') return '🎉 怪兽已被击败，挑战结束！'
+  if (s.status === 'ESCAPED') return '💨 怪兽逃跑啦'
+  if (s.question) return s.question
+  return s.category_id ? '⏳ 准备中…' : '🎤 抽背中：老师口头出题，学生作答'
+})
+/** 当前答题学生的宠物图（未领养显示蛋） */
+const currentPetImg = computed(() => {
+  const sid = state.value && state.value.pickedStudentId
+  if (!sid) return ''
+  return petImgOf(petMap.value.get(sid))
+})
+/** 判定按钮是否禁用：自动模式需已抽到人；点名模式需选中人 */
+const judgeDisabled = computed(() => {
+  const s = state.value
+  if (!s) return true
+  if (s.mode === 'MANUAL') return !form.value.manualId
+  return !s.pickedStudentId
 })
 
-/** 拉取今日状态（进入页面 + 15s 轮询兜底；首次进入已 KILLED 不播击杀演出） */
-async function loadToday() {
+// ============ 大厅：列表 / 新建 / 进入 / 战报 ============
+async function loadSessions() {
+  try { sessions.value = await http.get('/boss/sessions') } catch { /* 静默留空 */ }
+}
+function openCreate() {
+  form.value = { mode: 'RANDOM', title: defaultTitle('RANDOM'), categoryId: null, difficulty: null, manualId: null }
+  showCreate.value = true
+}
+function pickMode(key) {
+  form.value.mode = key
+  form.value.title = defaultTitle(key)
+}
+function defaultTitle(mode) {
+  const d = new Date()
+  return `${d.getMonth() + 1}月${d.getDate()}日 · ${modeLabel(mode)}`
+}
+async function doStart() {
+  if (busy.value) return
+  busy.value = true
   try {
-    const d = await http.get('/boss/today')
-    if (!inited) {
-      inited = true
-      killPlayed = d ? d.status === 'KILLED' : false
-      state.value = d
-      return
-    }
-    applyState(d)
-  } catch { /* 网络抖动静默，等下一轮轮询 */ }
+    const r = await http.post('/boss/start', {
+      mode: form.value.mode, title: form.value.title,
+      categoryId: form.value.categoryId, difficulty: form.value.difficulty,
+    })
+    showCreate.value = false
+    await enterState(r)
+    ElMessage.success('挑战开始！')
+  } catch (e) { ElMessage.error(e?.message || '开始失败') } finally { busy.value = false }
+}
+async function enterBattle(bossId) {
+  try {
+    const s = await http.get('/boss/state', { params: { bossId } })
+    if (!s) { ElMessage.warning('场次不存在'); return }
+    await enterState(s)
+  } catch (e) { ElMessage.error(e?.message || '进入失败') }
+}
+/** 进入战斗大屏：重置演出态（已结束的不补播击杀动画） */
+async function enterState(s) {
+  state.value = s
+  view.value = 'battle'
+  report.value = null
+  imgErr.value = false
+  bossDie.value = false
+  killPlayed = s.status === 'KILLED'
+  if (s.status === 'KILLED') killName.value = (s.stats && s.stats.killStudentName) || '勇士'
+}
+function backToList() {
+  view.value = 'list'
+  state.value = null
+  loadSessions()
+}
+async function openReport(bossId) {
+  try { report.value = await http.get('/boss/report', { params: { bossId } }) }
+  catch (e) { ElMessage.error(e?.message || '战报加载失败') }
+}
+function fmtTime(t) { return t ? String(t).slice(5, 16).replace('-', '/') : '' }
+
+// ============ 战斗操作 ============
+async function doJudge(result) {
+  if (busy.value || !state.value) return
+  const s = state.value
+  const isManual = s.mode === 'MANUAL'
+  const studentId = isManual ? form.value.manualId : s.pickedStudentId
+  if (!studentId) { ElMessage.warning(isManual ? '请先在下拉点名' : '还没轮到学生答题'); return }
+  busy.value = true
+  try {
+    const r = await http.post('/boss/judge', {
+      bossId: s.id, studentId, quizId: s.currentQuizId || null, result,
+    })
+    if (result === 'PASS') flyPet(studentId)   // 宠物飞出攻击
+    form.value.manualId = null
+    applyState(r)
+  } catch (e) { ElMessage.error(e?.message || '判定失败') } finally { busy.value = false }
 }
 
-/** 应用新状态：HP 下降触发扣血演出；运行中发现 KILLED 补播击杀（SSE 丢失兜底） */
+// ============ 状态应用 / 演出 ============
+const emojiEl = ref(null)
+const hurtText = ref('')
+const hurtKey = ref(0)
+const bossDie = ref(false)
+const killName = ref('')
+const killBanner = ref(false)
+const pickPulseOn = ref(false)
+let killPlayed = false
+let offCmd = null
+let pollTimer = null
+let pickTimer = null
+
 function applyState(s) {
-  if (!s) { state.value = null; return }
+  if (!s) return
   const old = state.value
-  if (old && old.id !== s.id) {          // 新 Boss（次日重开）：重置击杀演出态
-    bossDie.value = false
-    imgErr.value = false
-    killPlayed = s.status === 'KILLED'
-  }
+  if (old && old.id !== s.id) { bossDie.value = false; imgErr.value = false; killPlayed = s.status === 'KILLED' }
   if (old && old.id === s.id && Number(s.hp_left) < Number(old.hp_left)) {
     triggerHurt(s.hit_per_pass || Number(old.hp_left) - Number(s.hp_left))
   }
@@ -276,19 +365,15 @@ function applyState(s) {
     playKilled((s.stats && s.stats.killStudentName) || '勇士')
   }
 }
-
-/** 扣血演出：emoji 抖动重播 + 飘 -N 数字 */
 function triggerHurt(dmg) {
   hurtKey.value++
   hurtText.value = dmg
   if (emojiEl.value) {
     emojiEl.value.classList.remove('hurt')
-    void emojiEl.value.offsetWidth   // 强制重排，保证连续扣血时抖动动画重播
+    void emojiEl.value.offsetWidth
     emojiEl.value.classList.add('hurt')
   }
 }
-
-/** 击杀演出：Boss 爆炸 + 金雨 + 全屏播报 3 秒 */
 function playKilled(name) {
   if (killPlayed) return
   killPlayed = true
@@ -298,41 +383,80 @@ function playKilled(name) {
   fireConfetti(true)
   setTimeout(() => { killBanner.value = false }, 3000)
 }
-
-/** 三发金色彩带雨（Radish 同款模式） */
 function fireConfetti(big = false) {
   const colors = ['#ffc107', '#ff9800', '#ff5722', '#fff']
   const z = 9999
   const count = big ? 200 : 60
   confetti({ particleCount: count, angle: 60, spread: 70, origin: { x: 0, y: 0.85 }, colors, zIndex: z })
   confetti({ particleCount: count, angle: 120, spread: 70, origin: { x: 1, y: 0.85 }, colors, zIndex: z })
-  setTimeout(() => {
-    confetti({ particleCount: big ? 180 : 90, spread: 110, origin: { y: 0.35 }, colors, zIndex: z })
-  }, 260)
+  setTimeout(() => confetti({ particleCount: big ? 180 : 90, spread: 110, origin: { y: 0.35 }, colors, zIndex: z }), 260)
+}
+
+/**
+ * 宠物攻击飞行：答题学生宠物从姓名卡中心飞向怪兽中心（fixed + transform，~0.7s）。
+ * 照 EvolutionShow 飞行模式：双 rAF 触发过渡，结束移除 DOM。未领养显示蛋。
+ */
+function flyPet(studentId) {
+  const p = petMap.value.get(studentId)
+  const src = document.querySelector('.picker-card')
+  if (!p || !src || !emojiEl.value) return
+  const r1 = src.getBoundingClientRect()
+  const r2 = emojiEl.value.getBoundingClientRect()
+  const img = document.createElement('img')
+  img.src = petImgOf(p)
+  const size = 64
+  img.style.cssText = `position:fixed;left:${r1.left + r1.width / 2 - size / 2}px;top:${r1.top + r1.height / 2 - size / 2}px;` +
+    `width:${size}px;height:${size}px;object-fit:contain;z-index:9998;pointer-events:none;` +
+    `transition:transform .7s cubic-bezier(.45,-.15,.35,1.15),opacity .7s;will-change:transform;`
+  document.body.appendChild(img)
+  const dx = (r2.left + r2.width / 2) - (r1.left + r1.width / 2)
+  const dy = (r2.top + r2.height / 2) - (r1.top + r1.height / 2)
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    img.style.transform = `translate(${dx}px,${dy}px) scale(1.25) rotate(20deg)`
+  }))
+  setTimeout(() => img.remove(), 720)
+}
+
+// ============ 下拉数据 ============
+async function loadOptions() {
+  if (!cats.value.length) {
+    try { cats.value = (await http.get('/quiz/categories')).filter(c => c.enabled !== false && c.enabled !== 0) } catch { /* 空仍可抽背 */ }
+  }
+  if (!students.value.length) {
+    try { students.value = await http.get('/roster/students') } catch { /* 点名不可用 */ }
+  }
+  if (!petMap.value.size) {
+    try {
+      const d = await http.get('/pet/pets')
+      const list = d?.pets || d || []
+      petMap.value = new Map(list.map(p => [p.studentId, p]))
+    } catch { /* 无宠物数据不阻断 */ }
+  }
 }
 
 onMounted(() => {
-  loadToday()
+  loadSessions()
   loadOptions()
-  // 独立路由不经 MainLayout，SSE 通道需自建（同 /m 手机页模式）
   startRemote()
   offCmd = onRemoteCmd((action, payload) => {
-    if (action === 'boss.state') applyState(payload)
-    else if (action === 'boss.pick') {
-      // 抽人即时高亮（下一次 boss.state 会带回同一数据，这里先本地更新）
-      if (state.value) {
-        state.value.pickedStudentName = payload.name
-        state.value.pickedStudentId = payload.studentId
-      }
+    if (view.value !== 'battle' || !state.value) return
+    if (action === 'boss.state' && payload.id === state.value.id) applyState(payload)
+    else if (action === 'boss.pick' && (!payload.bossId || payload.bossId === state.value.id)) {
+      state.value.pickedStudentName = payload.name
+      state.value.pickedStudentId = payload.studentId
       pickPulseOn.value = true
       clearTimeout(pickTimer)
       pickTimer = setTimeout(() => { pickPulseOn.value = false }, 800)
-    } else if (action === 'boss.killed') {
+    } else if (action === 'boss.killed' && (!payload.bossId || payload.bossId === state.value.id)) {
       playKilled(payload.killStudentName || '勇士')
     }
   })
-  // 15s 轮询兜底（SSE 断连时大屏仍能追上进度）
-  pollTimer = setInterval(() => { if (!document.hidden) loadToday() }, 15000)
+  // 15s 轮询兜底（只在战斗中追当前场）
+  pollTimer = setInterval(() => {
+    if (document.hidden || view.value !== 'battle' || !state.value) return
+    http.get('/boss/state', { params: { bossId: state.value.id } })
+      .then(s => { if (s && view.value === 'battle') applyState(s) }).catch(() => {})
+  }, 15000)
 })
 
 onBeforeUnmount(() => {
@@ -351,7 +475,6 @@ onBeforeUnmount(() => {
   color: #fff;
 }
 
-/* 返回工作台按钮（全屏独立页的出口；半透明玻璃不抢戏，等待态/战斗态均常驻右上角） */
 .boss-exit {
   position: fixed; top: 16px; right: 22px; z-index: 40;
   background: rgba(255,255,255,.12); color: rgba(255,255,255,.9);
@@ -361,73 +484,135 @@ onBeforeUnmount(() => {
 }
 .boss-exit:hover { background: rgba(255,255,255,.26); color: #fff; }
 
-/* 大屏操作条（老师直接在大屏点：出题/抽人/判定） */
+/* ---------- 战场大厅 ---------- */
+.lobby { position: absolute; inset: 0; overflow-y: auto; padding: 70px 40px 40px; box-sizing: border-box; }
+.lobby-head { display: flex; align-items: center; justify-content: space-between; max-width: 900px; margin: 0 auto 28px; }
+.lobby-title { font-size: 40px; font-weight: 900; color: #ffc107; text-shadow: 0 4px 20px rgba(0,0,0,.5); }
+.session-list { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.session-card {
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14);
+  border-radius: 18px; padding: 18px 24px; backdrop-filter: blur(8px);
+}
+.sc-main { display: flex; align-items: center; gap: 20px; }
+.sc-monster { width: 64px; height: 64px; object-fit: contain; }
+.sc-monster.emoji { font-size: 48px; display: flex; align-items: center; justify-content: center; }
+.sc-title { font-size: 26px; font-weight: 800; color: #fff; }
+.sc-meta { display: flex; gap: 16px; margin-top: 6px; font-size: 17px; color: rgba(255,255,255,.7); }
+.sc-mode { color: #ffc107; font-weight: 700; }
+.sc-side { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.sc-status { font-size: 16px; font-weight: 700; padding: 3px 14px; border-radius: 999px; }
+.sc-status.active { background: rgba(105,240,174,.18); color: #69f0ae; }
+.sc-status.killed { background: rgba(255,193,7,.18); color: #ffc107; }
+.sc-status.escaped { background: rgba(255,255,255,.12); color: rgba(255,255,255,.6); }
+.lobby-empty { text-align: center; color: rgba(255,255,255,.5); font-size: 20px; padding: 60px 0; }
+
+/* ---------- 弹窗 ---------- */
+.modal-mask {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal {
+  background: #fff; color: #333; border-radius: 22px; padding: 30px 34px;
+  width: 640px; max-width: 96vw; max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 24px 70px rgba(0,0,0,.5);
+}
+.modal.wide { width: 720px; }
+.modal-title { font-size: 26px; font-weight: 900; margin-bottom: 20px; color: #2a2a3a; }
+.mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 22px; }
+.mode-card {
+  border: 2px solid #e6e6f0; border-radius: 16px; padding: 16px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.mode-card:hover { border-color: #b9a7e6; }
+.mode-card.on { border-color: #7c5cbf; background: #f3eefc; }
+.mode-emoji { font-size: 34px; }
+.mode-name { font-size: 19px; font-weight: 800; margin: 6px 0 4px; color: #2a2a3a; }
+.mode-desc { font-size: 13px; color: #7a7a8a; line-height: 1.5; }
+.fld { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.fld > span { width: 48px; font-weight: 700; color: #5a5a6a; flex-shrink: 0; }
+.fld-input {
+  flex: 1; font-size: 16px; padding: 11px 14px; border: 2px solid #e6e6f0;
+  border-radius: 12px; outline: none; background: #fff; color: #333; box-sizing: border-box;
+}
+.fld-input:focus { border-color: #7c5cbf; }
+.modal-tip { font-size: 14px; color: #b07a2a; background: #fff7e8; border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.m-btn {
+  font-size: 17px; font-weight: 800; padding: 11px 26px; border-radius: 12px;
+  border: 2px solid #ddd; background: #fff; color: #555; cursor: pointer;
+}
+.m-btn.primary { background: linear-gradient(135deg, #7c5cbf, #9b6dd6); border-color: transparent; color: #fff; }
+.m-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- 战报 ---------- */
+.rp-meta { display: flex; flex-wrap: wrap; gap: 18px; font-size: 17px; font-weight: 700; color: #555; margin-bottom: 18px; }
+.rp-st { padding: 2px 12px; border-radius: 999px; }
+.rp-st.killed { background: #fff3d0; color: #b07a2a; }
+.rp-st.active { background: #e2f8ec; color: #2e9e5b; }
+.rp-st.escaped { background: #eee; color: #888; }
+.rp-sub { font-size: 17px; font-weight: 800; color: #2a2a3a; margin: 16px 0 10px; }
+.rp-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.rp-group { display: flex; align-items: center; gap: 14px; background: #f6f6fa; border-radius: 12px; padding: 10px 16px; font-size: 16px; }
+.rp-group.win { background: #fff3d0; font-weight: 800; }
+.rg-rank { font-size: 22px; }
+.rg-name { font-weight: 800; color: #2a2a3a; }
+.rg-stat { margin-left: auto; color: #666; }
+.rp-hits { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.rp-hit { display: flex; align-items: center; gap: 12px; font-size: 15px; color: #444; background: #fafafe; border-radius: 10px; padding: 8px 14px; }
+.rh-name { font-weight: 800; min-width: 70px; }
+.rh-q { color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rh-g { margin-left: auto; color: #b07a2a; font-weight: 700; flex-shrink: 0; }
+
+/* ---------- 战斗大屏 ---------- */
 .boss-ctrl {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
   display: flex; align-items: center; justify-content: center; gap: 30px; flex-wrap: wrap;
   padding: 16px 24px; background: rgba(0,0,0,.52); backdrop-filter: blur(8px);
   border-top: 1px solid rgba(255,255,255,.14);
 }
-.ctrl-group { display: flex; align-items: center; gap: 12px; }
 .ctrl-btn {
   font-size: 26px; font-weight: 800; color: #fff; border: none; border-radius: 14px;
   padding: 14px 30px; cursor: pointer; transition: transform .12s, filter .12s, opacity .12s;
 }
 .ctrl-btn:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.1); }
 .ctrl-btn:disabled { opacity: .38; cursor: not-allowed; }
+.ctrl-btn.small { font-size: 16px; padding: 9px 18px; }
 .ctrl-btn.primary { background: linear-gradient(135deg, #7c5cbf, #9b6dd6); box-shadow: 0 8px 26px rgba(124,92,191,.5); }
-.ctrl-btn.big { font-size: 30px; padding: 18px 52px; }
+.ctrl-btn.ghost { background: rgba(255,255,255,.14); }
 .ctrl-btn.draw { background: linear-gradient(135deg, #3a9bd1, #2fa8a0); }
 .ctrl-btn.pick { background: linear-gradient(135deg, #f0a030, #ef7d4d); }
 .ctrl-btn.pass { background: linear-gradient(135deg, #2e9e5b, #43b581); }
 .ctrl-btn.fail { background: linear-gradient(135deg, #d05060, #e06a7a); }
-/* 下拉（开始表单 + 点名）：深色玻璃底，option 用深色文字 */
 .boss-select {
   font-size: 20px; padding: 12px 16px; border-radius: 12px;
-  border: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.14); color: #fff;
-  cursor: pointer;
+  border: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.14); color: #fff; cursor: pointer;
 }
 .boss-select option { color: #222; }
 .boss-select.mini { font-size: 18px; padding: 11px 14px; }
-/* 等待封面开始表单 */
-.start-form { display: flex; gap: 16px; margin-top: 42px; align-items: center; flex-wrap: wrap; justify-content: center; }
 
-/* 等待态封面 */
-.wait-cover {
-  position: absolute; inset: 0; z-index: 10;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-}
-.wait-emoji { font-size: 140px; margin-bottom: 24px; animation: float 3s ease-in-out infinite; }
-.wait-title { font-size: 56px; font-weight: 900; color: #ffc107; text-shadow: 0 4px 24px rgba(0,0,0,.5); }
-.wait-sub { font-size: 26px; color: rgba(255,255,255,.65); margin-top: 16px; }
-
-/* 顶部标题条 */
 .boss-header {
   position: absolute; top: 0; left: 0; right: 0; z-index: 20;
   display: flex; align-items: center; gap: 20px;
-  /* 右 padding 加大：给右上角常驻「返回工作台」按钮腾位，避免压住状态胶囊 */
   padding: 18px 160px 18px 32px; background: rgba(0,0,0,.45); backdrop-filter: blur(8px);
 }
 .bh-badge { font-size: 22px; font-weight: 800; color: #ffc107; }
 .bh-name { font-size: 22px; font-weight: 700; color: rgba(255,255,255,.9); }
-.bh-state { margin-left: auto; font-size: 18px; padding: 4px 16px; border-radius: 999px;
-  background: rgba(255,193,7,.18); color: #ffc107; }
+.bh-round { font-size: 18px; font-weight: 700; color: #7fd4ff; background: rgba(127,212,255,.14); padding: 4px 16px; border-radius: 999px; }
+.bh-state { margin-left: auto; font-size: 18px; padding: 4px 16px; border-radius: 999px; background: rgba(255,193,7,.18); color: #ffc107; }
 
-/* 主舞台左右分栏 */
 .boss-body {
   height: 100%; display: flex; align-items: center; justify-content: center;
-  gap: 90px; padding: 90px 60px 150px; box-sizing: border-box;   /* 底部 150px 留给操作条 */
+  gap: 90px; padding: 90px 60px 150px; box-sizing: border-box;
 }
 .boss-zone { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 480px; }
 .info-zone { display: flex; flex-direction: column; gap: 26px; width: 660px; }
 
-/* Boss 形象：摆动 / 扣血抖动 / 击杀爆炸（均为 transform/opacity） */
 .boss-emoji {
   font-size: 220px; line-height: 1.2;
   filter: drop-shadow(0 24px 48px rgba(0,0,0,.55));
   animation: swing 2.6s ease-in-out infinite;
 }
-/* 图片怪兽：透明底抠图，高度固定，随父级一起摆动/抖动/爆炸 */
 .boss-img { height: 360px; width: auto; max-width: 480px; object-fit: contain; display: block; }
 @keyframes swing {
   0%, 100% { transform: rotate(-5deg) translateY(0); }
@@ -447,7 +632,6 @@ onBeforeUnmount(() => {
   100% { transform: scale(2.6); opacity: 0; }
 }
 
-/* 扣血飘字 */
 .hurt-num {
   position: absolute; top: 30px; right: 30px; z-index: 5;
   font-size: 76px; font-weight: 900; color: #ff5252;
@@ -460,7 +644,6 @@ onBeforeUnmount(() => {
   100% { transform: translateY(-140px) scale(1); opacity: 0; }
 }
 
-/* HP 条 */
 .hp-wrap { width: 100%; margin-top: 28px; }
 .hp-label { font-size: 30px; font-weight: 800; color: #ff8a80; margin-bottom: 10px; }
 .hp-track { height: 30px; border-radius: 15px; background: rgba(255,255,255,.12); overflow: hidden; }
@@ -475,7 +658,6 @@ onBeforeUnmount(() => {
   background: rgba(0,0,0,.4); padding: 12px 32px; border-radius: 14px;
 }
 
-/* 题目卡 */
 .q-card {
   background: rgba(0,0,0,.45); backdrop-filter: blur(12px);
   border: 1px solid rgba(255,255,255,.15); border-radius: 20px;
@@ -483,13 +665,11 @@ onBeforeUnmount(() => {
   display: flex; flex-direction: column; justify-content: center; gap: 12px;
 }
 .q-cat { font-size: 22px; color: #ffc107; font-weight: 700; }
-.q-text { font-size: 40px; font-weight: 800; line-height: 1.4; }
-.q-hint { font-size: 18px; color: rgba(255,255,255,.45); }
+.q-text { font-size: 38px; font-weight: 800; line-height: 1.4; }
 
-/* 当前答题人 */
 .picker-card {
-  display: flex; align-items: center; gap: 24px;
-  background: rgba(0,0,0,.45); border-radius: 16px; padding: 20px 32px;
+  display: flex; align-items: center; gap: 20px;
+  background: rgba(0,0,0,.45); border-radius: 16px; padding: 18px 32px;
 }
 .picker-card.pulse { animation: pulse .8s ease; }
 @keyframes pulse {
@@ -497,10 +677,10 @@ onBeforeUnmount(() => {
   40% { transform: scale(1.06); }
   100% { transform: scale(1); }
 }
+.pk-pet { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; filter: drop-shadow(0 4px 10px rgba(0,0,0,.4)); }
 .pk-label { font-size: 26px; color: rgba(255,255,255,.75); }
-.pk-name { font-size: 44px; font-weight: 900; color: #ffc107; text-shadow: 0 0 30px rgba(255,193,7,.4); }
+.pk-name { font-size: 42px; font-weight: 900; color: #ffc107; text-shadow: 0 0 30px rgba(255,193,7,.4); }
 
-/* 今日战绩 */
 .stats-card {
   background: rgba(0,0,0,.45); border-radius: 16px; padding: 20px 32px;
   display: flex; flex-direction: column; gap: 14px;
@@ -515,7 +695,6 @@ onBeforeUnmount(() => {
 .ss-name { color: rgba(255,255,255,.9); font-weight: 700; }
 .ss-score { color: #69f0ae; font-weight: 800; margin-left: auto; }
 
-/* 击杀全屏播报（Radish banner 同款） */
 .banner {
   position: absolute; inset: 0; z-index: 30;
   display: flex; align-items: center; justify-content: center; pointer-events: none;
@@ -533,6 +712,4 @@ onBeforeUnmount(() => {
   60% { transform: scale(.92); opacity: 1; }
   100% { transform: scale(1); }
 }
-
-@keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-20px) } }
 </style>

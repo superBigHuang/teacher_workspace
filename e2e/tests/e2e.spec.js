@@ -1876,121 +1876,117 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
       expect((await apiPost('/quiz/category/delete/' + impCat2.id)).code).toBe(200)
     })
 
-    // ============ 11k. 每日打怪兽 ============
-    await test.step('打怪兽：reset 兜底→开始(幂等)→出题(手机含答案/大屏无答案)→抽人→FAIL 不扣血→PASS 循环击杀三档奖励→reset 回滚成长值；/boss 大屏等待态（自清理）', async () => {
+    // ============ 11k. 打怪兽（多模式·场次化） ============
+    await test.step('打怪兽：reset→四模式(题库随机/抽背随机/点名/班级全对击杀+团结奖/小组击杀+组排名)→场次列表/战报→reset 回滚；/boss 大屏大厅', async () => {
       const j = async (fn, url, data) => (await fn(url, data ? { headers: authHeader(), data } : { headers: authHeader() })).json()
       const apiGet = (url) => j(request.get.bind(request), API + url)
       const apiPost = (url, data) => j(request.post.bind(request), API + url, data)
-      const petsAll = async () => ((await apiGet('/pet/pets')).data.pets || [])
       const bossLogs = async () =>
         ((await apiGet('/pet/logs?studentId=' + testStudentId)).data || []).filter(l => l.source === 'BOSS')
 
-      // 开头兜底重置（防当日残留 Boss/流水干扰数字断言）
       await apiPost('/boss/reset', {})
-      // 专用题库分类 + 2 题（限定 boss/draw 抽题范围；afterAll 题库兜底按 E2E 名清理，此处也显式删）
+      // 专用题库分类 + 2 题（题库场自动抽题用；afterAll 题库兜底按 E2E 名清理，此处也显式删）
       const catId = (await apiPost('/quiz/category', { name: 'E2E打怪兽分类', icon: '👾' })).data.id
       const qA = (await apiPost('/quiz/save', { categoryId: catId, question: 'E2E怪兽题甲：2+2=?', answer: '4', difficulty: 1 })).data.id
       const qB = (await apiPost('/quiz/save', { categoryId: catId, question: 'E2E怪兽题乙：3+3=?', answer: '6', difficulty: 1 })).data.id
 
-      // ① 今日无 Boss：today=null；未开始出题被拒
-      expect((await apiGet('/boss/today')).data).toBeNull()
-      expect((await apiPost('/boss/draw', { categoryId: catId })).code).not.toBe(200)
+      // ① 题库·随机场：开局自动出题(currentQuizId)且自动抽人，state 不含 answer
+      let r = await apiPost('/boss/start', { mode: 'RANDOM', categoryId: catId })
+      expect(r.code).toBe(200)
+      const b1 = r.data
+      expect(b1.status).toBe('ACTIVE')
+      expect(b1.currentQuizId).toBeTruthy()
+      expect(b1.pickedStudentId).toBeTruthy()
+      expect(b1).not.toHaveProperty('answer')
+      // PASS：扣 hit_per_pass 血，且自动切题切人（currentQuizId/人都变了）
+      const hp0 = b1.hp_left
+      let jd = await apiPost('/boss/judge', { bossId: b1.id, studentId: b1.pickedStudentId, quizId: b1.currentQuizId, result: 'PASS' })
+      expect(jd.code).toBe(200)
+      expect(jd.data.hp_left).toBe(hp0 - b1.hit_per_pass)
+      expect(jd.data.pickedStudentId).toBeTruthy()
+      expect(jd.data.currentQuizId).not.toBe(b1.currentQuizId)
+      // FAIL：不扣血、stats.fail+1
+      const hp1 = jd.data.hp_left
+      jd = await apiPost('/boss/judge', { bossId: b1.id, studentId: jd.data.pickedStudentId, quizId: jd.data.currentQuizId, result: 'FAIL' })
+      expect(jd.code).toBe(200)
+      expect(jd.data.hp_left).toBe(hp1)
+      expect(jd.data.stats.fail).toBe(1)
+      // 防错配：提交不属于当前题的 quizId 必被拒（2 题池子随机抽题会循环重复，故用不存在的题 id）
+      expect((await apiPost('/boss/judge', { bossId: b1.id, studentId: jd.data.pickedStudentId, quizId: 99999999, result: 'PASS' })).code).not.toBe(200)
 
-      // ② 开始挑战：幂等（两次 start 返回同一 id）；HP 满、ACTIVE、带 emoji/名字；大屏 state 无 answer 字段
-      const s1 = await apiPost('/boss/start', {})
-      expect(s1.code).toBe(200)
-      const bossId = s1.data.id
-      expect((await apiPost('/boss/start', {})).data.id).toBe(bossId)
-      let t = (await apiGet('/boss/today')).data
-      expect(t.id).toBe(bossId)
-      expect(t.status).toBe('ACTIVE')
-      expect(t.hp_left).toBe(t.hp_total)
-      expect(t.boss_emoji).toBeTruthy()
-      expect(t.boss_name).toBeTruthy()
-      expect(t).not.toHaveProperty('answer')
-      const needPass = Math.ceil(t.hp_total / t.hit_per_pass)   // 默认 100/10=10 次通关击杀
+      // ② 抽背·随机场：无题库 currentQuizId=null，judge 不带 quizId 也能判定、答对加分扣血
+      r = await apiPost('/boss/start', { mode: 'RANDOM', categoryId: null })
+      const b2 = r.data
+      expect(b2.currentQuizId).toBeNull()
+      expect(b2.pickedStudentId).toBeTruthy()
+      jd = await apiPost('/boss/judge', { bossId: b2.id, studentId: b2.pickedStudentId, result: 'PASS' })
+      expect(jd.code).toBe(200)
+      expect(jd.data.hp_left).toBe(b2.hp_total - b2.hit_per_pass)
 
-      // ③ 出题：手机端响应含答案；大屏 today 只回题干不含答案
-      const draw = await apiPost('/boss/draw', { categoryId: catId })
-      expect(draw.code).toBe(200)
-      expect(draw.data.answer).toBeTruthy()
-      expect(['E2E怪兽题甲：2+2=?', 'E2E怪兽题乙：3+3=?']).toContain(draw.data.question)
-      t = (await apiGet('/boss/today')).data
-      expect(t.question).toBe(draw.data.question)
-      expect(t.answer).toBeUndefined()
+      // ③ 点名场：开局不选人；未选人判被拒；点测试生 PASS 后仍不自动选人
+      r = await apiPost('/boss/start', { mode: 'MANUAL', categoryId: null })
+      const b3 = r.data
+      expect(b3.pickedStudentId).toBeNull()
+      expect((await apiPost('/boss/judge', { bossId: b3.id, result: 'PASS' })).code).not.toBe(200)
+      jd = await apiPost('/boss/judge', { bossId: b3.id, studentId: testStudentId, result: 'PASS' })
+      expect(jd.code).toBe(200)
+      expect(jd.data.pickedStudentId).toBeNull()
 
-      // ④ 抽人：MANUAL 点测试生（创建默认分入班主任班）；state 带回答题人
-      const pick = await apiPost('/boss/pick-student', { mode: 'MANUAL', studentId: testStudentId })
-      expect(pick.code).toBe(200)
-      expect(pick.data.studentId).toBe(testStudentId)
-      expect((await apiGet('/boss/today')).data.pickedStudentId).toBe(testStudentId)
-
-      // ⑤ FAIL：不扣血、不加分、stats.fail+1；判定后当前题消费（question 清空）
-      const hpBeforeFail = t.hp_left
-      const jf = await apiPost('/boss/judge', { studentId: testStudentId, quizId: draw.data.id, result: 'FAIL' })
-      expect(jf.code).toBe(200)
-      expect(jf.data.hp_left).toBe(hpBeforeFail)
-      t = (await apiGet('/boss/today')).data
-      expect(t.stats.fail).toBe(1)
-      expect(t.question).toBeNull()
-      expect((await bossLogs()).length).toBe(0)   // FAIL 不写成长值流水
-      // 乱序防护：未出题直接判定被拒
-      expect((await apiPost('/boss/judge', { studentId: testStudentId, quizId: qA, result: 'PASS' })).code).not.toBe(200)
-
-      // ⑥ 记录一名真实学生宠物成长值（验证击杀"全班同庆 +2"被 reset 回滚，不留污染）
-      const realPet = (await petsAll()).find(p => p.studentId !== testStudentId && !String(p.name || '').includes('E2E'))
-      const expBefore = realPet ? realPet.exp : null
-
-      // ⑦ PASS 循环到击杀：每次 出题→点名测试生→判定；HP 递减，最后一击 killed
-      let killed = false
-      for (let i = 0; i < needPass + 2 && !killed; i++) {
-        const d = await apiPost('/boss/draw', { categoryId: catId })
-        expect(d.code).toBe(200)
-        await apiPost('/boss/pick-student', { mode: 'MANUAL', studentId: testStudentId })
-        const jj = await apiPost('/boss/judge', { studentId: testStudentId, quizId: d.data.id, result: 'PASS' })
+      // ④ 班级场：全班按顺序轮答一轮全对 → 击杀；测试生在班，应拿到「团结就是力量」
+      r = await apiPost('/boss/start', { mode: 'CLASS', categoryId: null })
+      const b4 = r.data
+      const classN = b4.progress.total
+      let cur = b4, killed4 = false
+      for (let i = 0; i < classN + 2 && !killed4; i++) {
+        const sid = cur.pickedStudentId
+        const jj = await apiPost('/boss/judge', { bossId: b4.id, studentId: sid, result: 'PASS' })
         expect(jj.code).toBe(200)
-        if (jj.data.killed) {
-          killed = true
-          expect(jj.data.killStudentName).toBeTruthy()
-        }
+        cur = jj.data
+        if (jj.data.killed) killed4 = true
       }
-      expect(killed).toBe(true)
-      t = (await apiGet('/boss/today')).data
-      expect(t.status).toBe('KILLED')
-      expect(t.hp_left).toBe(0)
-      expect(t.kill_student_id).toBe(testStudentId)
-      expect(t.stats.pass).toBe(needPass)
-      // 击杀后出题/判定被拒
-      expect((await apiPost('/boss/draw', { categoryId: catId })).code).not.toBe(200)
+      expect(killed4).toBe(true)
+      expect(cur.status).toBe('KILLED')
+      expect(cur.hp_left).toBe(0)
+      expect(cur.stats.pass).toBe(classN)
+      const unity = (await bossLogs()).some(l => String(l.remark || '').includes('团结'))
+      expect(unity).toBe(true)
 
-      // ⑧ 三档奖励：通关 ×needPass（每条 +5）+ 击杀 +10；测试生在班主任班时还吃"全班同庆 +2"（创建默认分班）
-      const logs = await bossLogs()
-      const passLogs = logs.filter(l => l.score === 5 && String(l.remark || '').includes('通关'))
-      const killLogs = logs.filter(l => l.score === 10 && String(l.remark || '').includes('击杀'))
-      const allLogs = logs.filter(l => l.score === 2 && String(l.remark || '').includes('同庆'))
-      expect(passLogs.length).toBe(needPass)
-      expect(killLogs.length).toBe(1)
-      expect(allLogs.length).toBeLessThanOrEqual(1)   // 在班则 1 条同庆，不在则 0
-      expect(logs.reduce((a, l) => a + l.score, 0)).toBe(needPass * 5 + 10 + allLogs.length * 2)
+      // ⑤ 小组场：按座位列轮答至击杀；战报返回小组排名；场次列表含本场
+      r = await apiPost('/boss/start', { mode: 'GROUP', categoryId: null })
+      const b5 = r.data
+      let cur5 = b5, killed5 = false
+      for (let i = 0; i < 80 && !killed5; i++) {
+        const sid = cur5.pickedStudentId
+        if (!sid) break
+        const jj = await apiPost('/boss/judge', { bossId: b5.id, studentId: sid, result: 'PASS' })
+        expect(jj.code).toBe(200)
+        cur5 = jj.data
+        if (jj.data.killed) killed5 = true
+      }
+      expect(killed5).toBe(true)
+      const rep = await apiGet('/boss/report?bossId=' + b5.id)
+      expect(rep.code).toBe(200)
+      expect(rep.data.groups.length).toBeGreaterThan(0)
+      const gpass = rep.data.groups.map(g => g.pass)
+      expect(gpass.every((v, i) => i === 0 || gpass[i - 1] >= v)).toBe(true)  // 排名按答对降序
+      const sess = await apiGet('/boss/sessions')
+      expect(sess.data.some(s => s.id === b5.id)).toBe(true)
 
-      // ⑨ reset：Boss/命中清空、BOSS 流水撤回（成长值回滚）、today=null
+      // ⑥ reset：当日场次/命中清空、BOSS 流水全部撤回（成长值回滚，零污染）
       await apiPost('/boss/reset', {})
-      expect((await apiGet('/boss/today')).data).toBeNull()
       expect((await bossLogs()).length).toBe(0)
-      if (realPet) {
-        const after = (await petsAll()).find(p => p.studentId === realPet.studentId)
-        expect(after.exp).toBe(expBefore)   // 全班同庆 +2 已随撤回回滚，真实学生成长值零污染
-      }
+      const after = await apiGet('/boss/sessions')
+      expect(after.data.some(s => [b1, b2, b3, b4, b5].some(b => b.id === s.id))).toBe(false)
 
-      // ⑩ 清理专用分类（先删题再删空分类）
+      // 清理专用分类（先删题再删空分类）
       for (const id of [qA, qB]) {
         await request.delete(API + '/quiz/' + id, { headers: authHeader() })
       }
       expect((await apiPost('/quiz/category/delete/' + catId)).code).toBe(200)
 
-      // ⑪ /boss 大屏页：reset 后无 Boss → 等待老师开始封面（独立路由正常鉴权渲染）
+      // ⑦ /boss 大屏页：reset 后进入大厅，显示「新建战场」入口（独立路由正常鉴权渲染）
       await page.goto('/boss')
-      await expect(page.locator('.wait-title', { hasText: '今日还没有怪兽' })).toBeVisible({ timeout: 8000 })
+      await expect(page.getByRole('button', { name: '新建战场' })).toBeVisible({ timeout: 8000 })
     })
 
     // ============ 11g. 头像与班级设置 ============
