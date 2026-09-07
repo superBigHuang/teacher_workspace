@@ -52,3 +52,9 @@ application-local.properties
 # ===== 临时密钥 / 信息文件（严禁入库）=====
 info.txt
 secret*.txt
+
+# ===== 原始素材源文件（成品已在 frontend/public/，AI 原图/视频源不入库）=====
+/vedio/
+/img/怪兽/
+/img/学生宠物系统/
+/img/bark/
