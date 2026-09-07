@@ -2376,4 +2376,18 @@ test.describe('班主任工作台 全站走查（真实40人数据）', () => {
     })
   })
 
+  // ============ 拔萝卜早读大屏 /radish：免登独立路由 ============
+  test('拔萝卜 /radish 免登大屏', async ({ page, context }) => {
+    // 清空 token 模拟大屏教室机未登录场景
+    await context.clearCookies()
+    await page.addInitScript(() => { try { localStorage.clear() } catch {} })
+    await page.goto('/radish')
+    // 不跳 /login
+    await expect(page).toHaveURL(/\/radish/)
+    // IDLE 封面：开始按钮可见
+    await expect(page.locator('.idle-cover')).toBeVisible()
+    await expect(page.locator('.idle-btn')).toContainText('点击开始')
+    // 不套 MainLayout 侧边栏
+    await expect(page.locator('.el-aside')).toHaveCount(0)
+  })
 })
