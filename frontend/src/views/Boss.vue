@@ -30,7 +30,10 @@
       <div class="boss-body">
         <!-- 左区：Boss 形象 + HP 条 -->
         <div class="boss-zone">
-          <div ref="emojiEl" class="boss-emoji" :class="{ die: bossDie }">{{ state.boss_emoji }}</div>
+          <div ref="emojiEl" class="boss-emoji" :class="{ die: bossDie }">
+            <img v-if="isImg && !imgErr" :src="bossImg" class="boss-img" alt="" @error="imgErr = true">
+            <span v-else>{{ isImg ? '👾' : state.boss_emoji }}</span>
+          </div>
           <div v-if="hurtText" :key="hurtKey" class="hurt-num">-{{ hurtText }}</div>
           <div class="hp-wrap">
             <div class="hp-label">HP {{ state.hp_left }} / {{ state.hp_total }}</div>
@@ -188,6 +191,8 @@ async function doJudge(result) {
 
 /** 今日 Boss 整体状态（/boss/today：boss 全量 + 当前题 + 答题人 + stats；不含答案——防大屏泄题） */
 const state = ref(null)
+/** 怪兽图片加载失败标记（回退 emoji 👾）；新 Boss 时重置 */
+const imgErr = ref(false)
 /** Boss emoji 元素引用（扣血抖动动画手动重播用） */
 const emojiEl = ref(null)
 /** 扣血飘字文案与重播 key（如 -10） */
@@ -209,6 +214,13 @@ let offCmd = null
 let pollTimer = null
 let pickTimer = null
 
+/** 是否为图片怪兽：boss_emoji 存图片编号 "1"~"4"（列仅 VARCHAR(8)）；历史 emoji 字符按文本渲染 */
+const isImg = computed(() => {
+  const e = state.value && state.value.boss_emoji
+  return typeof e === 'string' && /^[1-9]$/.test(e.trim())
+})
+/** 图片怪兽地址：编号拼 /boss/monster{n}.png（frontend/public/boss/） */
+const bossImg = computed(() => `/boss/monster${String(state.value.boss_emoji).trim()}.png`)
 /** HP 百分比（0~100） */
 const hpPct = computed(() => {
   const s = state.value
@@ -253,6 +265,7 @@ function applyState(s) {
   const old = state.value
   if (old && old.id !== s.id) {          // 新 Boss（次日重开）：重置击杀演出态
     bossDie.value = false
+    imgErr.value = false
     killPlayed = s.status === 'KILLED'
   }
   if (old && old.id === s.id && Number(s.hp_left) < Number(old.hp_left)) {
@@ -414,6 +427,8 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0 24px 48px rgba(0,0,0,.55));
   animation: swing 2.6s ease-in-out infinite;
 }
+/* 图片怪兽：透明底抠图，高度固定，随父级一起摆动/抖动/爆炸 */
+.boss-img { height: 360px; width: auto; max-width: 480px; object-fit: contain; display: block; }
 @keyframes swing {
   0%, 100% { transform: rotate(-5deg) translateY(0); }
   50% { transform: rotate(5deg) translateY(-14px); }

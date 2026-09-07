@@ -26,8 +26,10 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequestMapping("/api/boss")
 public class BossController extends BaseController {
 
-    /** Boss 形象 emoji 池（每天随机一只） */
-    private static final String[] EMOJI_POOL = {"👾", "🐲", "👹", "🦖", "🦑", "👽", "🤖"};
+    /** Boss 形象图片编号池（对应 frontend/public/boss/monsterN.png，透明底抠图，每天随机一只）。
+     *  boss_emoji 列仅 VARCHAR(8) 存不下路径，故只存编号 "1"~"4"，前端拼 /boss/monster{n}.png；
+     *  历史 emoji 字符（👾 等）前端按文本渲染，图片加载失败回退 emoji。 */
+    private static final String[] IMG_POOL = {"1", "2", "3", "4"};
     /** Boss 随机名字池 */
     private static final String[] NAME_POOL = {
             "小怪兽阿呜", "钢铁大王", "捣蛋鬼嘟嘟", "暗夜魔王", "泡泡糖怪", "雷霆战将", "贪吃小恐龙", "迷雾法师"};
@@ -90,7 +92,7 @@ public class BossController extends BaseController {
 
     /**
      * 开始今日挑战：幂等——今日已存在（含已击杀）直接返回现有记录，不复活不重建；
-     * 新建时随机 emoji + 名字，HP/单次伤害读 setting（缺省 100/10）。
+     * 新建时随机形象图片 + 名字，HP/单次伤害读 setting（缺省 100/10）。
      */
     @PostMapping("/start")
     public Result<Map<String, Object>> start(@RequestBody Map<String, Object> body) {
@@ -100,7 +102,7 @@ public class BossController extends BaseController {
             int hpTotal = settingInt(uid, "boss.hp_total", 100);
             int hitPerPass = settingInt(uid, "boss.hit_per_pass", 10);
             Random rnd = new Random();
-            String emoji = EMOJI_POOL[rnd.nextInt(EMOJI_POOL.length)];
+            String emoji = IMG_POOL[rnd.nextInt(IMG_POOL.length)];
             String name = NAME_POOL[rnd.nextInt(NAME_POOL.length)];
             jdbc.update("INSERT INTO daily_boss(user_id,boss_date,boss_name,boss_emoji,hp_total,hp_left,hit_per_pass) " +
                             "VALUES(?,?,?,?,?,?,?)",
