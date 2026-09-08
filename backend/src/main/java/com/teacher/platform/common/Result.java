@@ -33,6 +33,11 @@ public class Result<T> {
         return new Result<>(code, msg, null);
     }
 
+    /** 业务失败且需携带数据（如登录失败时带 needCaptcha 标记） */
+    public static <T> Result<T> fail(int code, String msg, T data) {
+        return new Result<>(code, msg, data);
+    }
+
     public int getCode() { return code; }
     public void setCode(int code) { this.code = code; }
     public String getMsg() { return msg; }

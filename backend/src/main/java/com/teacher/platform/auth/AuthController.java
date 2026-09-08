@@ -25,27 +25,53 @@ public class AuthController {
 
     private final JdbcTemplate jdbc;
     private final JwtUtil jwtUtil;
+    private final CaptchaService captchaService;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
-    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil) {
+    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil, CaptchaService captchaService) {
         this.jdbc = jdbc;
         this.jwtUtil = jwtUtil;
+        this.captchaService = captchaService;
     }
 
-    /** 登录：账号 + 密码 */
+    /** 登录验证码（算术图形码）：公开端点，失败达阈值后登录须携带 */
+    @GetMapping("/captcha")
+    public Result<Map<String, Object>> captcha() {
+        return Result.ok(captchaService.issue());
+    }
+
+    /** 登录：账号 + 密码；连续失败 3 次后需带验证码 */
     @PostMapping("/login")
-    public Result<Map<String, Object>> login(@RequestBody Map<String, Object> body) {
+    public Result<Map<String, Object>> login(@RequestBody Map<String, Object> body, HttpServletRequest req) {
         String username = str(body.get("username"));
         String password = str(body.get("password"));
         if (username.isBlank()) return Result.fail(401, "请输入账号");
+        String ip = clientIp(req);
+
+        // 失败达阈值：先验验证码，不通过直接拒（不查库、不计密码失败）
+        if (captchaService.needCaptcha(username, ip)) {
+            String captchaId = str(body.get("captchaId"));
+            String captchaCode = str(body.get("captchaCode"));
+            if (captchaId.isBlank() || captchaCode.isBlank()) {
+                return Result.fail(401, "请完成验证码", Map.of("needCaptcha", true));
+            }
+            if (!captchaService.verify(captchaId, captchaCode)) {
+                return Result.fail(401, "验证码错误，请重试", Map.of("needCaptcha", true));
+            }
+        }
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
                     "SELECT id,username,password_hash,display_name FROM sys_user WHERE username=?", username);
-            if (list.isEmpty()) return Result.fail(401, "账号不存在");
+            if (list.isEmpty()) {
+                captchaService.onFail(username, ip);
+                return Result.fail(401, "账号不存在", failData(username, ip));
+            }
             Map<String, Object> user = list.get(0);
             if (!encoder.matches(password, (String) user.get("password_hash"))) {
-                return Result.fail(401, "密码错误");
+                captchaService.onFail(username, ip);
+                return Result.fail(401, "密码错误", failData(username, ip));
             }
+            captchaService.onSuccess(username, ip);
             String dn = user.get("display_name") == null ? username : (String) user.get("display_name");
             String token = jwtUtil.generate(((Number) user.get("id")).longValue(), username);
             return Result.ok(Map.of("token", token, "displayName", dn, "username", username));
@@ -53,6 +79,20 @@ public class AuthController {
             log.error("登录查询失败：{}", e.getMessage(), e);
             return Result.fail("登录失败，请稍后重试");
         }
+    }
+
+    /** 失败响应附带的 data：达阈值时带 needCaptcha=true，前端据此拉起验证码 */
+    private Map<String, Object> failData(String username, String ip) {
+        return captchaService.needCaptcha(username, ip) ? Map.of("needCaptcha", true) : null;
+    }
+
+    /** 取客户端 IP：优先代理头（X-Forwarded-For 首段 / X-Real-IP），回退直连地址 */
+    private String clientIp(HttpServletRequest req) {
+        String xff = req.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) return xff.split(",")[0].trim();
+        String xri = req.getHeader("X-Real-IP");
+        if (xri != null && !xri.isBlank()) return xri.trim();
+        return req.getRemoteAddr();
     }
 
     /** 当前登录账号信息 */

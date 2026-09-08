@@ -9,6 +9,12 @@
              @keyup.enter="doLogin" />
       <input v-model="loginForm.password" type="password" class="m-input" placeholder="密码"
              autocomplete="current-password" @keyup.enter="doLogin" />
+      <!-- 连续登录失败 3 次后出现：算术图形验证码，点图换一张 -->
+      <div v-if="needCaptcha" class="m-captcha">
+        <img :src="captchaImg" class="m-captcha-img" title="看不清？点我换一张" @click="loadCaptcha" />
+        <input v-model="captchaCode" class="m-input m-captcha-input" placeholder="验证码"
+               inputmode="numeric" @keyup.enter="doLogin" />
+      </div>
       <button class="m-btn-primary" @click="doLogin">登 录</button>
       <div class="login-tip">与 PC 端同一账号；登录后投影页打开座次表即可遥控</div>
     </div>
@@ -189,6 +195,19 @@ const router = useRouter()
 /** PC 端从菜单进入全屏遥控页的出口（手机窄屏不显示此按钮，手机上 /m 即主页） */
 function goBack() { router.push('/dashboard') }
 const loginForm = ref({ username: '', password: '' })
+// 验证码（失败 3 次后由后端 needCaptcha 拉起）
+const needCaptcha = ref(false)
+const captchaImg = ref('')
+const captchaId = ref('')
+const captchaCode = ref('')
+
+/** 拉取一张算术验证码图（点击图片也可刷新） */
+async function loadCaptcha() {
+  const d = await http.get('/auth/captcha')
+  captchaId.value = d.captchaId
+  captchaImg.value = d.img
+  captchaCode.value = ''
+}
 
 /** usePets() 实例（登录后才初始化，避免未登录发 401 请求被拦截器跳走） */
 const p = shallowRef(null)
@@ -279,16 +298,30 @@ function teardown() {
 }
 
 async function doLogin() {
-  const r = await http.post('/auth/login', {
+  const payload = {
     username: loginForm.value.username.trim(),
     password: loginForm.value.password
-  })
-  localStorage.setItem('token', r.token)
-  localStorage.setItem('displayName', r.displayName)
-  localStorage.setItem('username', r.username || '')
-  token.value = r.token
-  loginForm.value.password = ''
-  boot()
+  }
+  if (needCaptcha.value) {
+    payload.captchaId = captchaId.value
+    payload.captchaCode = captchaCode.value.trim()
+  }
+  try {
+    const r = await http.post('/auth/login', payload)
+    needCaptcha.value = false
+    localStorage.setItem('token', r.token)
+    localStorage.setItem('displayName', r.displayName)
+    localStorage.setItem('username', r.username || '')
+    token.value = r.token
+    loginForm.value.password = ''
+    boot()
+  } catch (e) {
+    // 后端要求验证码（失败达阈值/验证码错误）：拉起并刷新验证码图
+    if (e.data?.needCaptcha) {
+      needCaptcha.value = true
+      loadCaptcha()
+    }
+  }
 }
 
 function logout() {
@@ -450,6 +483,12 @@ async function bossJudge(result) {
   border: 2px solid #ffe0ec; border-radius: 14px; font-size: 16px; background: #fff; outline: none;
 }
 .m-input:focus { border-color: #f78fb3; }
+.m-captcha { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.m-captcha-img {
+  height: 48px; width: 116px; border-radius: 12px; cursor: pointer; flex-shrink: 0;
+  border: 2px solid #ffe0ec; background: #fff;
+}
+.m-captcha-input { margin-bottom: 0; flex: 1; }
 .m-btn-primary {
   width: 100%; padding: 14px; border: none; border-radius: 14px; font-size: 17px; font-weight: 800;
   color: #fff; background: linear-gradient(135deg, #ff9ec4, #ffb38a);

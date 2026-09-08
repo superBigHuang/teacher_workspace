@@ -19,6 +19,11 @@
         <el-input v-model="loginForm.username" size="large" placeholder="账号" :prefix-icon="User" class="field" />
         <el-input v-model="loginForm.password" type="password" size="large" show-password
           placeholder="密码" :prefix-icon="Lock" class="field" @keyup.enter="login" />
+        <!-- 连续登录失败 3 次后出现：算术图形验证码，点图可换一张 -->
+        <div v-if="needCaptcha" class="captcha-row field">
+          <img :src="captchaImg" class="captcha-img" title="看不清？点我换一张" @click="loadCaptcha">
+          <el-input v-model="captchaCode" size="large" placeholder="验证码" class="captcha-input" @keyup.enter="login" />
+        </div>
         <el-button type="primary" size="large" class="enter" :loading="loading" @click="login">进入工作台 🚪</el-button>
         <p class="hint">还没有账号？请联系管理员开通</p>
       </div>
@@ -37,6 +42,20 @@ const router = useRouter()
 const loading = ref(false)
 const loginForm = reactive({ username: '', password: '' })
 
+// 验证码（失败 3 次后由后端 needCaptcha 拉起）
+const needCaptcha = ref(false)
+const captchaImg = ref('')
+const captchaId = ref('')
+const captchaCode = ref('')
+
+/** 拉取一张算术验证码图（点击图片也可刷新） */
+async function loadCaptcha() {
+  const d = await http.get('/auth/captcha')
+  captchaId.value = d.captchaId
+  captchaImg.value = d.img
+  captchaCode.value = ''
+}
+
 /** 保存登录态并跳转工作台 */
 function saveAuth(data) {
   localStorage.setItem('token', data.token)
@@ -49,14 +68,21 @@ async function login() {
   if (!loginForm.username.trim()) return ElMessage.warning('请输入账号')
   if (!loginForm.password) return ElMessage.warning('请输入密码')
   loading.value = true
+  const payload = { username: loginForm.username.trim(), password: loginForm.password }
+  if (needCaptcha.value) {
+    payload.captchaId = captchaId.value
+    payload.captchaCode = captchaCode.value.trim()
+  }
   try {
-    const data = await http.post('/auth/login', {
-      username: loginForm.username.trim(),
-      password: loginForm.password
-    })
+    const data = await http.post('/auth/login', payload)
+    needCaptcha.value = false
     saveAuth(data)
   } catch (e) {
-    // 拦截器已提示
+    // 后端要求验证码（失败达阈值/验证码错误）：拉起并刷新验证码图
+    if (e.data?.needCaptcha) {
+      needCaptcha.value = true
+      loadCaptcha()
+    }
   } finally {
     loading.value = false
   }
@@ -100,6 +126,12 @@ h2 { margin: 10px 0 4px; color: #6b5b73; font-size: 22px; letter-spacing: 1px; }
 .sub { color: #b7a6b8; margin: 0 0 20px; font-size: 13px; }
 
 .field { margin-bottom: 14px; }
+.captcha-row { display: flex; gap: 10px; align-items: center; }
+.captcha-img {
+  height: 40px; width: 118px; border-radius: 10px; cursor: pointer; flex-shrink: 0;
+  border: 1px solid #f0dce8; background: #fff;
+}
+.captcha-input { flex: 1; }
 .enter {
   width: 100%; font-size: 16px; font-weight: 800; height: 46px; border-radius: 14px;
   border: none; margin-top: 2px;

@@ -19,7 +19,11 @@ http.interceptors.response.use(
     const body = resp.data
     if (body.code === 200) return body.data
     ElMessage.error(body.msg || '请求失败')
-    return Promise.reject(new Error(body.msg || '请求失败'))
+    // 业务失败：把 code/data 挂到 Error 上，调用方可读（如登录失败的 needCaptcha）
+    const e = new Error(body.msg || '请求失败')
+    e.code = body.code
+    e.data = body.data
+    return Promise.reject(e)
   },
   err => {
     if (err.response && err.response.status === 401) {

@@ -65,6 +65,12 @@
             <artifactId>poi-ooxml</artifactId>
             <version>5.3.0</version>
         </dependency>
+        <!-- 登录图形/算术验证码（纯 Java AWT，无 Redis 依赖） -->
+        <dependency>
+            <groupId>com.github.whvcse</groupId>
+            <artifactId>easy-captcha</artifactId>
+            <version>1.6.2</version>
+        </dependency>
         <!-- 测试：JUnit5 等（版本由 spring-boot-starter-parent 管理） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

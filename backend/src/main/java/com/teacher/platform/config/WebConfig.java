@@ -38,7 +38,8 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
                 // /remote/events 走一次性 ticket 鉴权（EventSource 无法带 Authorization 头），不在 JWT 拦截范围
-                .excludePathPatterns("/api/auth/login", "/api/remote/events");
+                // /auth/captcha 为公开的登录验证码图
+                .excludePathPatterns("/api/auth/login", "/api/auth/captcha", "/api/remote/events");
     }
 
     @Override
