@@ -24,7 +24,10 @@
       <!-- 一句话速记 -->
       <el-col :span="10">
         <el-card class="quick-card">
-          <div class="quick-title">⚡ 一句话速记 <span class="quick-hint">（回车 → 智能拆分到模块）</span></div>
+          <div class="quick-title">
+            <span>⚡ 一句话速记 <span class="quick-hint">（回车 → 智能拆分到模块）</span></span>
+            <el-button link type="primary" size="small" @click="helpDlg = true">📖 怎么写？</el-button>
+          </div>
           <div class="quick-example">例：今天小明迟到，已跟家长电话沟通 / 周三班会准备诚信主题PPT / 数学作业未交 催一下</div>
           <div class="quick-desc">系统自动识别归属：学生档案 / 班级日志 / 家校沟通 / 待办，弹窗勾选后一键保存</div>
           <div class="quick-input">
@@ -255,6 +258,19 @@
         <el-button type="primary" @click="confirmSave">一键保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 速记写法帮助 / 案例 -->
+    <el-dialog v-model="helpDlg" title="📖 一句话速记怎么写" width="560px">
+      <div class="help-tip">用 <b>/</b>、<b>；</b> 或<b>换行</b>分隔多件事；每件事写清<b>学生姓名</b>（或「3号」「学号3」）。回车后弹窗可勾选、可补选学生。</div>
+      <div v-for="h in HELP_ROWS" :key="h.module" class="help-row">
+        <el-tag size="small" effect="dark" :color="moduleColor(h.module)">{{ moduleLabel(h.module) }}</el-tag>
+        <div class="help-body">
+          <div class="help-kw">识别词：{{ h.kw }}</div>
+          <div class="help-ex">例：{{ h.ex }}</div>
+        </div>
+      </div>
+      <div class="help-note">提示：课堂纪律除了「说话/打闹/零食」等词，你在「班级日常 → 课堂纪律」登记过的违纪情况（如「上课睡觉」）也能识别；待办类不用写人名。</div>
+    </el-dialog>
   </div>
 </template>
 
@@ -295,6 +311,16 @@ const MODULE_META = {
 const moduleLabel = m => MODULE_META[m]?.label || m
 const moduleColor = m => MODULE_META[m]?.color || '#999'
 const needStudent = m => ['ATTENDANCE', 'COMM', 'HOMEWORK', 'DISCIPLINE'].includes(m)
+
+/** 速记写法帮助：各模块识别词 + 案例 */
+const HELP_ROWS = [
+  { module: 'ATTENDANCE', kw: '迟到、早退、请假、缺勤、旷课、早读', ex: '张三迟到' },
+  { module: 'HOMEWORK', kw: '作业、未交、催、补交（可带科目）', ex: '李四数学作业没交，催一下' },
+  { module: 'DISCIPLINE', kw: '说话、打闹、零食、捣乱，以及你登记过的违纪情况', ex: '王五上课睡觉 / 赵六和钱七上课说话' },
+  { module: 'COMM', kw: '电话、家长、微信、家访、家长群', ex: '孙七家长电话沟通过' },
+  { module: 'TODO', kw: '准备、班会、PPT、记得、别忘了、打印、采购', ex: '记得打印周五家长会PPT' }
+]
+const helpDlg = ref(false)
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -528,7 +554,7 @@ onMounted(async () => {
 .motto-row { margin-top: 12px; color: #6a6f82; }
 .motto-label { display: inline-block; width: 70px; color: #aab0c0; }
 .quick-card { height: 100%; border: 1px dashed #f0b8d0; }
-.quick-title { font-weight: 800; color: #5a5f72; font-size: 16px; }
+.quick-title { font-weight: 800; color: #5a5f72; font-size: 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .quick-hint { color: #f06292; font-size: 13px; }
 .quick-example { background: #f7f8fc; border-radius: 8px; padding: 10px; color: #7a7f92; font-size: 13px; margin: 10px 0; }
 .quick-desc { color: #aab0c0; font-size: 12px; margin-bottom: 12px; }
@@ -574,6 +600,13 @@ onMounted(async () => {
 .entry-text { color: #5a5f72; }
 .entry-student { width: 180px; margin-left: auto; }
 .parse-tip { color: #8a8fa3; font-size: 13px; margin-bottom: 8px; }
+/* 速记写法帮助弹窗 */
+.help-tip { background: #f7f8fc; border-radius: 8px; padding: 10px 12px; color: #5a5f72; font-size: 13px; margin-bottom: 12px; line-height: 1.6; }
+.help-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #eef0f6; }
+.help-body { flex: 1; font-size: 13px; line-height: 1.6; }
+.help-kw { color: #7a7f92; }
+.help-ex { color: #4a4f62; font-weight: 700; margin-top: 2px; }
+.help-note { margin-top: 12px; color: #e6a23c; font-size: 12px; line-height: 1.6; background: #fdf6ec; border-radius: 8px; padding: 8px 12px; }
 /* 请假提醒条：奶油黄底，数字+名单+操作三段 */
 .leave-card { margin-bottom: 16px; background: linear-gradient(135deg, #fff8e6, #fffdf5); border: 1px solid #f5e3b0; }
 .leave-card :deep(.el-card__body) { display: flex; align-items: center; gap: 20px; }

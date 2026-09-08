@@ -203,6 +203,12 @@ public class DashboardController extends BaseController {
                 "SELECT module_key, keywords FROM quick_note_rule WHERE enabled=1");
         List<Map<String, Object>> students = jdbc.queryForList(
                 "SELECT id,name,stu_no FROM student WHERE user_id=? AND class_id=?", uid, homeroomClassId());
+        // 课堂纪律历史违纪情况（班级日常登记过的 content 去重）：命中学生且句中含某条历史违纪 → 也判为课堂纪律
+        List<String> disPhrases = jdbc.queryForList(
+                "SELECT DISTINCT content FROM discipline_log WHERE user_id=? AND content IS NOT NULL AND content<>''",
+                String.class, uid);
+        disPhrases.removeIf(String::isBlank);
+        disPhrases.sort((a, b) -> b.length() - a.length()); // 长短语优先，降低短词误判
 
         String[] parts = content.split("[/／;；\n]");
         List<Map<String, Object>> segments = new ArrayList<>();
@@ -239,6 +245,15 @@ public class DashboardController extends BaseController {
                 if (byName || byNo) {
                     hit.add(Map.of("id", s.get("id"), "name", name));
                     if (byName) remain = remain.replace(name, ""); // 移除已命中长名，防其子串短名误命中
+                }
+            }
+            if (!hit.isEmpty()) {
+                // 命中学生 + 含历史违纪情况（课堂纪律下拉里已有过的）→ 追加课堂纪律模块
+                for (String phrase : disPhrases) {
+                    if (text.contains(phrase.trim())) {
+                        if (!modules.contains("DISCIPLINE")) modules.add("DISCIPLINE");
+                        break;
+                    }
                 }
             }
             if (modules.isEmpty()) modules.add("TODO"); // 无法识别默认待办
