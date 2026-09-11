@@ -80,6 +80,9 @@
 
     <!-- 全屏进化演出：全局挂载一处（原挂 Seat.vue，现任何页均可播，含宠物园 /pet 大屏） -->
     <EvolutionShow :scene="currentEvolve" @done="onEvolveDone" />
+
+    <!-- ICP 备案号（工信部要求底部展示并链接至备案系统） -->
+    <a class="beian" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">浙ICP备2026075470号</a>
   </div>
 </template>
 
@@ -278,5 +281,13 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .action-item.logout:hover { background: #fdf1f1; color: #f07070; }
 .sidebar.collapsed .user-card { justify-content: center; }
 .sidebar.collapsed .action-item { justify-content: center; }
-.content { flex: 1; padding: 22px 26px; overflow: auto; }
+.content { flex: 1; padding: 22px 26px 40px; overflow: auto; }
+/* ICP 备案号：全站底部固定居中 */
+.beian {
+  position: fixed; bottom: 8px; left: 212px; right: 0; z-index: 200;
+  text-align: center; font-size: 12px; color: #b39db0; text-decoration: none;
+  pointer-events: auto;
+}
+.beian:hover { color: #f06292; }
+.sidebar.collapsed ~ .content ~ .beian, .layout:has(.sidebar.collapsed) .beian { left: 76px; }
 </style>

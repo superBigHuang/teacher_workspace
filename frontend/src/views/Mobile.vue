@@ -176,6 +176,9 @@
         <button v-if="toast.canUndo" class="toast-undo" @click="undo">↩️ 撤销</button>
       </div>
     </template>
+
+    <!-- ICP 备案号（登录态/未登录均展示，固定底部） -->
+    <a class="m-beian" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">浙ICP备2026075470号</a>
   </div>
 </template>
 
@@ -652,4 +655,9 @@ async function bossJudge(result) {
 .boss-btn.pass { flex: 1; background: linear-gradient(135deg, #7bd88f, #4fb86e); box-shadow: 0 6px 16px rgba(80, 190, 110, .35); }
 .boss-btn.fail { flex: 1; background: linear-gradient(135deg, #f0909a, #e06070); box-shadow: 0 6px 16px rgba(224, 100, 110, .35); }
 
+/* ICP 备案号：固定底部居中，弹窗遮罩层级更高，打开弹层时自动被盖住 */
+.m-beian {
+  position: fixed; bottom: 8px; left: 0; right: 0; z-index: 50;
+  text-align: center; font-size: 11px; color: #b39db0; text-decoration: none;
+}
 </style>

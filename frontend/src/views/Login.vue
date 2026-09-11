@@ -28,6 +28,9 @@
         <p class="hint">还没有账号？请联系管理员开通</p>
       </div>
     </div>
+
+    <!-- ICP 备案号（工信部要求底部展示并链接至备案系统） -->
+    <a class="beian" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">浙ICP备2026075470号</a>
   </div>
 </template>
 
@@ -137,4 +140,9 @@ h2 { margin: 10px 0 4px; color: #6b5b73; font-size: 22px; letter-spacing: 1px; }
   border: none; margin-top: 2px;
 }
 .hint { color: #cdb9c9; font-size: 12px; margin: 14px 0 0; }
+.beian {
+  position: absolute; bottom: 14px; left: 0; right: 0; z-index: 2;
+  text-align: center; font-size: 12px; color: #b39db0; text-decoration: none;
+}
+.beian:hover { color: #f06292; }
 </style>
