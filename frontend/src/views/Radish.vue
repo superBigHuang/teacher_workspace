@@ -577,9 +577,35 @@ async function testMic() {
   tick()
 }
 
+// ============ 视频预加载（封面阶段后台下载） ============
+// 线上首屏时 solo 视频是播放瞬间才赋 src，容易出现"文字已出、视频还在下载"。
+// loopEl 静态绑定 src + preload=auto 已会在封面期自动下载；这里再把 4 个 solo 视频
+// 用隐藏 video 元素预取，正式播放时命中浏览器缓存秒开。
+const PRELOAD_SRC = [SRC.intro, SRC.pullout, SRC.success, SRC.ending]
+let preloadEls = []
+
+function preloadVideos() {
+  for (const src of PRELOAD_SRC) {
+    const v = document.createElement('video')
+    v.preload = 'auto'
+    v.src = src
+    v.muted = true
+    v.setAttribute('aria-hidden', 'true')
+    v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;'
+    document.body.appendChild(v)
+    preloadEls.push(v)
+  }
+}
+
+function destroyPreload() {
+  for (const v of preloadEls) { v.pause(); v.removeAttribute('src'); v.load(); v.remove() }
+  preloadEls = []
+}
+
 // ============ 生命周期 ============
 onMounted(() => {
   record.value = parseInt(localStorage.getItem('radish_record') || '0', 10)
+  preloadVideos()
 })
 
 onBeforeUnmount(() => {
@@ -587,6 +613,7 @@ onBeforeUnmount(() => {
   clearInterval(countdownTimer)
   stopLoop()
   if (soloEl.value) soloEl.value.pause()
+  destroyPreload()
   if (micStream) micStream.getTracks().forEach(t => t.stop())
   if (audioCtx) audioCtx.close()
 })
