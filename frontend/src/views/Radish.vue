@@ -122,7 +122,7 @@
           </div>
           <div class="gp-row">
             <label>倒计时分钟 {{ cfg.countdownMin }}</label>
-            <input type="range" min="0" max="30" step="1" v-model.number="cfg.countdownMin">
+            <input type="range" min="0" max="60" step="1" v-model.number="cfg.countdownMin">
           </div>
           <button class="gp-test" @click="testMic">🎤 测试麦克风</button>
           <div v-if="micTestResult" class="gp-result">{{ micTestResult }}</div>
@@ -179,7 +179,7 @@ const noiseFloor = ref(0.05)   // 环境底噪基线（READY 阶段测 2 秒）
 const cfg = reactive({
   threshold: 0.15,     // 低于此音量视为没读
   targetSec: 18,       // 每根萝卜目标秒数（全班正常朗读下）
-  countdownMin: 15     // 倒计时分钟数（0=不限时）
+  countdownMin: 40     // 倒计时分钟数（0=不限时），默认一节早读 40 分钟
 })
 
 
