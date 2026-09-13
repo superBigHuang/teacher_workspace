@@ -57,6 +57,11 @@
         </div>
       </transition>
 
+      <!-- 进度里程碑鼓励气泡：30/50/80% 各弹一次，轻量提示不抢拔出高潮 -->
+      <transition name="tip">
+        <div v-if="showTip && state === 'PULLING'" class="milestone-tip">{{ tipText }}</div>
+      </transition>
+
       <!-- 结尾战报卡 -->
       <transition name="fade">
         <div v-if="state === 'ENDING' && showReport" class="report-card">
@@ -83,12 +88,21 @@
         </div>
       </transition>
 
-      <!-- READY 测底噪 -->
+      <!-- READY 测底噪 + 核心视频就绪门控 -->
       <transition name="fade">
         <div v-if="state === 'READY'" class="ready-cover">
           <div class="ready-emoji">🤫</div>
           <div class="ready-text">嘘…兔兔在听教室的安静声</div>
           <div class="ready-bar"><div class="ready-fill" :style="{ width: readyPct+'%' }"></div></div>
+          <!-- 核心视频就绪状态：intro/loop/pullout 全部 canplaythrough 才进入 -->
+          <div class="ready-load">
+            <span class="rl-title">🐰 兔兔正在蹦过来</span>
+            <span v-for="(s, i) in CORE_SRC" :key="s" class="rl-dot" :class="{ ok: mediaReady[s] }">
+              {{ mediaReady[s] ? '✓' : '…' }} {{ CORE_LABEL[i] }}
+            </span>
+            <span class="rl-count">{{ coreReadyCount }}/3</span>
+          </div>
+          <div v-if="readySlow" class="ready-load-tip">第一次加载视频有点大，再等兔兔一下…</div>
         </div>
       </transition>
     </div>
@@ -241,34 +255,68 @@ function readVolume() {
   return Math.min(1, rms * 3) // 增益放大到 0~1
 }
 
-// ============ READY 测底噪 ============
+// ============ READY 测底噪 + 核心视频就绪门控（并行） ============
+const coreReadyCount = computed(() => CORE_SRC.reduce((n, src) => n + (mediaReady[src] ? 1 : 0), 0))
+const readySlow = computed(() => noiseMeasured.value && coreReadyCount.value < CORE_SRC.length)
+
 async function start() {
   const ok = await initMic()
   if (!ok) return
   state.value = 'READY'
   readyPct.value = 0
+  noiseMeasured.value = false
+  ensurePreload([SRC.intro, SRC.pullout])   // 幂等：封面 onMounted 已建，兜底
+
   const samples = []
   const t0 = performance.now()
-  const tick = () => {
-    const raw = readVolume()
-    samples.push(raw)
-    readyPct.value = Math.min(100, ((performance.now() - t0) / 2000) * 100)
-    if (performance.now() - t0 < 2000) {
-      requestAnimationFrame(tick)
-    } else {
-      samples.sort((a, b) => a - b)
-      // 取 90 分位作为底噪（排除突发响动）
-      noiseFloor.value = samples[Math.floor(samples.length * 0.9)] || 0.05
-      startIntro()
+  // 任务一：2s 环境底噪测量（90 分位，排除突发响动）
+  const measureNoise = new Promise(resolve => {
+    const tick = () => {
+      const raw = readVolume()
+      samples.push(raw)
+      readyPct.value = Math.min(100, ((performance.now() - t0) / 2000) * 100)
+      if (performance.now() - t0 < 2000) {
+        requestAnimationFrame(tick)
+      } else {
+        samples.sort((a, b) => a - b)
+        noiseFloor.value = samples[Math.floor(samples.length * 0.9)] || 0.05
+        noiseMeasured.value = true
+        resolve()
+      }
     }
-  }
-  tick()
+    tick()
+  })
+
+  // 任务二：3 个核心视频就绪（或 20s 超时兜底）；两者都完成才进 INTRO
+  await Promise.all([measureNoise, waitCoreReady()])
+
+  // 核心就绪后带宽全部让给后续视频（游戏过程时间充裕：success 首次拔出约 24s 后、ending 结束早读才用）
+  ensurePreload(LATER_SRC)
+  startIntro()
 }
 
 // ============ INTRO 开头片 → PULLING 叠化循环 ============
 let rafId = null
 let lastT = 0
 let successStage = '' // SUCCESS 连播阶段：'pullout'（拔出来）→ 'celebrate'（庆祝成片）
+
+// 进度里程碑鼓励：跨过 30/50/80% 各弹一次气泡（每根萝卜 startPulling 重置 step）
+const MILESTONES = [
+  { at: 30, text: '加把劲！兔兔正在用力！💪' },
+  { at: 50, text: '萝卜松动啦！再大声点！📢' },
+  { at: 80, text: '马上拔出来了！冲啊！🔥' }
+]
+let milestoneStep = 0
+const showTip = ref(false)
+const tipText = ref('')
+let tipTimer = null
+
+function showMilestone(text) {
+  tipText.value = text
+  showTip.value = true
+  clearTimeout(tipTimer)
+  tipTimer = setTimeout(() => { showTip.value = false }, 1300)
+}
 
 /** 测底噪后播开头片（一次），播完 onSoloEnded 进入叠化循环 */
 function startIntro() {
@@ -318,6 +366,7 @@ function startPulling() {
   state.value = 'PULLING'
   progress.value = 0
   combo.value = 0
+  milestoneStep = 0
   if (soloEl.value) soloEl.value.pause()
   startLoop()
   if (countdownLeft.value <= 0 && cfg.countdownMin > 0) {
@@ -359,6 +408,12 @@ function pullLoop(now) {
   const K = 100 / (0.25 * cfg.targetSec)
   const gain = Math.max(0, volume.value - cfg.threshold) * K * speedMul / difficulty.value * dt
   progress.value = Math.min(100, progress.value + gain)
+
+  // 里程碑鼓励：首次跨过 30/50/80% 各弹一次（只在递增时触发，静音停涨不会重复）
+  if (milestoneStep < MILESTONES.length && progress.value >= MILESTONES[milestoneStep].at) {
+    showMilestone(MILESTONES[milestoneStep].text)
+    milestoneStep++
+  }
 
   // 峰值纪录
   if (volume.value > peakVolume.value) {
@@ -499,6 +554,8 @@ function endSession() {
   cancelAnimationFrame(rafId)
   clearInterval(countdownTimer)
   countdownTimer = null
+  clearTimeout(tipTimer)
+  showTip.value = false
   state.value = 'ENDING'
   showReport.value = false
 
@@ -542,6 +599,8 @@ function reset() {
   combo.value = 0
   countdownLeft.value = 0
   showReport.value = false
+  showTip.value = false
+  clearTimeout(tipTimer)
   peakVolume.value = 0
   peakTime.value = ''
   clearInterval(countdownTimer)
@@ -577,16 +636,31 @@ async function testMic() {
   tick()
 }
 
-// ============ 视频预加载（封面阶段后台下载） ============
-// 线上首屏时 solo 视频是播放瞬间才赋 src，容易出现"文字已出、视频还在下载"。
-// loopEl 静态绑定 src + preload=auto 已会在封面期自动下载；这里再把 4 个 solo 视频
-// 用隐藏 video 元素预取，正式播放时命中浏览器缓存秒开。
-const PRELOAD_SRC = [SRC.intro, SRC.pullout, SRC.success, SRC.ending]
+// ============ 视频预加载（分级） ============
+// 核心视频（READY 门控，全部 canplaythrough 才进入游戏）：
+//   intro  READY 结束立刻播；loop intro 仅 1.18s 后就接；pullout 首次拔出时播，纳入门控零意外
+// 后续视频（门控通过后立刻后台开下，游戏过程时间充裕）：success 首次拔出约 24s 后才需要、ending 结束早读才播
+const CORE_SRC = [SRC.intro, SRC.loop, SRC.pullout]
+const CORE_LABEL = ['开头片', '用力拔', '拔出来']
+const LATER_SRC = [SRC.success, SRC.ending]
+const READY_MEDIA_TIMEOUT = 20000   // 弱网兜底：最多等 20s 强进（faststart 后本就能边下边播）
+const mediaReady = reactive({})     // src -> true（canplaythrough 触发），驱动 READY 加载提示
+const noiseMeasured = ref(false)    // 2s 底噪已测完
 let preloadEls = []
 
-function preloadVideos() {
-  for (const src of PRELOAD_SRC) {
+/** 取核心素材对应的 video 元素：loop 复用模板 loopEl，intro/pullout 用隐藏预取元素 */
+function getCoreEl(src) {
+  if (src === SRC.loop) return loopEl.value
+  return preloadEls.find(el => el.dataset.src === src) || null
+}
+
+/** 幂等创建隐藏预取 video（1px+透明，非 display:none，浏览器正常调度下载） */
+function ensurePreload(srcs) {
+  for (const src of srcs) {
+    if (preloadEls.some(el => el.dataset.src === src)) continue
     const v = document.createElement('video')
+    v.dataset.src = src
+    v.addEventListener('canplaythrough', () => { mediaReady[src] = true })
     v.preload = 'auto'
     v.src = src
     v.muted = true
@@ -597,6 +671,25 @@ function preloadVideos() {
   }
 }
 
+/** READY 门控：等 3 个核心视频都 canplaythrough（已就绪立即返回），超时强进 resolve 不 reject */
+function waitCoreReady() {
+  return Promise.all(CORE_SRC.map(src => new Promise(resolve => {
+    if (mediaReady[src]) { resolve(); return }
+    const el = getCoreEl(src)
+    if (!el) { resolve(); return }   // 元素异常不阻塞流程
+    let timer = null
+    const done = () => {
+      clearTimeout(timer)
+      el.removeEventListener('canplaythrough', done)
+      mediaReady[src] = true         // 超时强进也置位，让 UI 计数收满
+      resolve()
+    }
+    if (el.readyState >= 4) { done(); return }
+    el.addEventListener('canplaythrough', done)
+    timer = setTimeout(done, READY_MEDIA_TIMEOUT)
+  })))
+}
+
 function destroyPreload() {
   for (const v of preloadEls) { v.pause(); v.removeAttribute('src'); v.load(); v.remove() }
   preloadEls = []
@@ -605,12 +698,19 @@ function destroyPreload() {
 // ============ 生命周期 ============
 onMounted(() => {
   record.value = parseInt(localStorage.getItem('radish_record') || '0', 10)
-  preloadVideos()
+  // loop 由模板 loopEl 静态 src + preload=auto 自行下载，这里只补就绪标记（含已就绪的兜底判断）
+  if (loopEl.value) {
+    if (loopEl.value.readyState >= 4) mediaReady[SRC.loop] = true
+    loopEl.value.addEventListener('canplaythrough', () => { mediaReady[SRC.loop] = true })
+  }
+  // 封面停留期间先下 intro/pullout（loop 已由 loopEl 下载），把等待藏在老师组织课堂的时间里
+  ensurePreload([SRC.intro, SRC.pullout])
 })
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(rafId)
   clearInterval(countdownTimer)
+  clearTimeout(tipTimer)
   stopLoop()
   if (soloEl.value) soloEl.value.pause()
   destroyPreload()
@@ -712,6 +812,24 @@ onBeforeUnmount(() => {
   100% { transform: scale(1); }
 }
 
+/* 里程碑鼓励气泡（30/50/80%）：比拔出大字小一号，居中偏上，弹入后上浮淡出 */
+.milestone-tip {
+  position: absolute; top: 24%; left: 50%; z-index: 28;
+  transform: translateX(-50%);
+  font-size: 56px; font-weight: 900; color: #fff; white-space: nowrap;
+  text-shadow: 0 3px 18px rgba(0,0,0,.65), 0 0 40px rgba(255,193,7,.35);
+  pointer-events: none;
+}
+.tip-enter-active { animation: tipIn .35s cubic-bezier(.68,-0.55,.27,1.55); }
+.tip-leave-active { transition: all .35s ease-in; }
+.tip-enter-from { opacity: 0; }
+.tip-leave-to { opacity: 0; transform: translateX(-50%) translateY(-18px) scale(.92); }
+@keyframes tipIn {
+  0% { opacity: 0; transform: translateX(-50%) scale(.4); }
+  60% { transform: translateX(-50%) scale(1.12); }
+  100% { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
 /* 结尾战报 */
 .report-card {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
@@ -774,6 +892,20 @@ onBeforeUnmount(() => {
   border-radius: 6px; overflow: hidden;
 }
 .ready-fill { height: 100%; background: #4caf50; border-radius: 6px; transition: width .1s linear; }
+
+/* READY 视频就绪状态 */
+.ready-load {
+  margin-top: 28px; display: flex; align-items: center; gap: 16px;
+  color: rgba(255,255,255,.75); font-size: 20px;
+}
+.rl-title { color: rgba(255,255,255,.9); font-weight: 700; }
+.rl-dot {
+  padding: 4px 14px; border-radius: 999px; font-size: 17px;
+  background: rgba(255,255,255,.1); transition: background .2s, color .2s;
+}
+.rl-dot.ok { background: rgba(76,175,80,.25); color: #8aff9e; }
+.rl-count { font-weight: 800; color: #ffc107; }
+.ready-load-tip { margin-top: 14px; font-size: 18px; color: rgba(255,255,255,.6); }
 
 /* 设置齿轮 */
 .gear {
