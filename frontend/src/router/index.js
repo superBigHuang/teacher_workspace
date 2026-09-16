@@ -26,6 +26,8 @@ const routes = [
       { path: 'parent', name: 'parent', meta: { title: '家长联系方式' }, component: () => import('../views/Parent.vue') },
       { path: 'timetable', name: 'timetable', meta: { title: '课程表' }, component: () => import('../views/Timetable.vue') },
       { path: 'todo', name: 'todo', meta: { title: '待办事项' }, component: () => import('../views/Todo.vue') },
+      // 用户管理：仅 ADMIN 可见（下方 beforeEach 兜底，菜单也按角色过滤）
+      { path: 'users', name: 'users', meta: { title: '用户管理', adminOnly: true }, component: () => import('../views/Users.vue') },
       { path: 'daily', name: 'daily', meta: { title: '班级日常' }, component: () => import('../views/Daily.vue') },
       { path: 'settings', name: 'settings', meta: { title: '个人设置' }, component: () => import('../views/Settings.vue') }
     ]
@@ -39,6 +41,10 @@ router.beforeEach((to) => {
   // /m 手机页无 token 时显示自带登录卡，不跳转；/radish 大屏页免登（教室投影场景）
   if (to.path !== '/login' && to.path !== '/m' && to.path !== '/radish' && !token) return '/login'
   if (to.path === '/login' && token) return '/dashboard'
+  // 管理员页：角色已知且非 ADMIN 直接拦回工作台（role 缺失的旧登录态放行，/auth/me 回填后菜单自然不显示入口，后端另有 403 兜底）
+  if (to.meta.adminOnly && localStorage.getItem('role') && localStorage.getItem('role') !== 'ADMIN') {
+    return '/dashboard'
+  }
 })
 
 export default router

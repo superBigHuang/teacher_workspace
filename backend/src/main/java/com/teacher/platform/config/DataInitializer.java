@@ -52,6 +52,16 @@ public class DataInitializer implements CommandLineRunner {
         // sys_user 新增字段
         ensureColumn("sys_user", "email", "email VARCHAR(128)");
         ensureColumn("sys_user", "school", "school VARCHAR(128)");
+        // 用户管理：角色 ADMIN/TEACHER、启用状态、注册渠道、最近登录时间（存量账号默认 TEACHER/启用）
+        ensureColumn("sys_user", "role",
+                "role VARCHAR(16) NOT NULL DEFAULT 'TEACHER' COMMENT '角色：ADMIN/TEACHER'");
+        ensureColumn("sys_user", "enabled",
+                "enabled TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用'");
+        ensureColumn("sys_user", "source",
+                "source VARCHAR(16) NULL COMMENT '注册渠道 friend/xhs/school'");
+        ensureColumn("sys_user", "last_login_at", "last_login_at DATETIME NULL COMMENT '最近登录时间'");
+        // 存量库：把初始 admin 固化为管理员（幂等，每次启动校正，防止误降权）
+        jdbc.update("UPDATE sys_user SET role='ADMIN' WHERE username='admin'");
         // 业务表补 user_id（现有行自动取 DEFAULT 1，即 admin）
         for (String t : USER_TABLES) {
             ensureColumn(t, "user_id", "user_id BIGINT NOT NULL DEFAULT 1");
@@ -354,8 +364,9 @@ public class DataInitializer implements CommandLineRunner {
     // ---------- 默认 admin 账号 ----------
     private void seedAdmin() {
         if (count("SELECT COUNT(*) FROM sys_user") == 0) {
-            jdbc.update("INSERT INTO sys_user(username,password_hash,display_name) VALUES(?,?,?)",
-                    "admin", encoder.encode("123456"), "王路飞");
+            // 新库：初始 admin 直接以 ADMIN/启用 播种，密码 123456
+            jdbc.update("INSERT INTO sys_user(username,password_hash,display_name,role,enabled) " +
+                    "VALUES(?,?,?,'ADMIN',1)", "admin", encoder.encode("123456"), "王路飞");
         }
         // admin 账号（id=1）的默认数据；已有数据则仅补齐缺失设置
         Long adminId = jdbc.queryForObject("SELECT id FROM sys_user WHERE username='admin' ORDER BY id LIMIT 1",

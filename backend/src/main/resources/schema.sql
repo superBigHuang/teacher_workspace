@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS sys_user (
   display_name VARCHAR(64) COMMENT '显示名/教师名',
   email VARCHAR(128) COMMENT '邮箱',
   school VARCHAR(128) COMMENT '学校名称',
+  role VARCHAR(16) NOT NULL DEFAULT 'TEACHER' COMMENT '角色：ADMIN 管理员 / TEACHER 普通老师',
+  enabled TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用（账号只停用不删除）',
+  source VARCHAR(16) NULL COMMENT '注册渠道：friend 朋友介绍 / xhs 小红书 / school 同校老师',
+  last_login_at DATETIME NULL COMMENT '最近登录时间',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

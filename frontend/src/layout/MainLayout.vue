@@ -87,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
@@ -115,14 +115,20 @@ const displayName = ref(localStorage.getItem('displayName') || '老师')
 const school = ref('')
 const avatar = ref(localStorage.getItem('avatar') || '🐻')
 const avatarDlg = ref(false)
+/** 是否管理员：控制「用户管理」菜单显隐（登录写入 + /me 校正） */
+const isAdmin = ref(localStorage.getItem('role') === 'ADMIN')
 
-/** 拉取当前用户信息（显示名/学校/头像），供侧边栏底部展示 */
+/** 拉取当前用户信息（显示名/学校/头像/角色），供侧边栏底部展示与菜单过滤 */
 onMounted(async () => {
   try {
     const me = await http.get('/auth/me')
     displayName.value = me.displayName || '老师'
     school.value = me.school || ''
     localStorage.setItem('displayName', displayName.value)
+    // 回填角色：角色被管理员调整后，下次进系统菜单自动更新
+    const role = me.role || 'TEACHER'
+    localStorage.setItem('role', role)
+    isAdmin.value = role === 'ADMIN'
     const p = await http.get('/settings/profile')
     if (p.avatar) { avatar.value = p.avatar; localStorage.setItem('avatar', p.avatar) }
   } catch (e) { /* 未登录等情况忽略 */ }
@@ -171,7 +177,7 @@ async function pickAvatar(a) {
   } catch (e) { /* 网络异常时本地已切换，下次进页面重试 */ }
 }
 
-const navs = [
+const rawNavs = [
   { path: '/dashboard', title: '工作台', icon: 'DataAnalysis', color: '#f06292', bg: '#fde4ee' },
   { path: '/seat', title: '座次表', icon: 'Grid', color: '#5b9bd5', bg: '#e3eefc' },
   { path: '/pet', title: '宠物园', emoji: '🐾', color: '#e08a4b', bg: '#fdeede' },
@@ -183,18 +189,23 @@ const navs = [
   { path: '/parent', title: '家长联系方式', icon: 'Phone', color: '#e08a4b', bg: '#fdeede' },
   { path: '/timetable', title: '课程表', icon: 'Calendar', color: '#f06292', bg: '#fde4ee' },
   { path: '/todo', title: '待办事项', icon: 'CircleCheck', color: '#43b581', bg: '#e4f6ec' },
+  // 用户管理：仅管理员可见
+  { path: '/users', title: '用户管理', emoji: '👥', color: '#6a8fcf', bg: '#e8eefc', adminOnly: true },
   // 互动游戏分组：课堂投影小游戏，后续新游戏往 children 里加
   { group: '互动游戏', emoji: '🎮', color: '#7c5cbf', bg: '#efe9fb', children: [
     { path: '/boss', title: '打怪兽', emoji: '👾' },
     { path: '/radish', title: '拔萝卜早读', emoji: '🥕' }
   ] }
 ]
+/** 实际渲染菜单：非管理员过滤掉 adminOnly 项 */
+const navs = computed(() => rawNavs.filter(item => !item.adminOnly || isAdmin.value))
 
 function logout() {
   stopRemote()
   localStorage.removeItem('token')
   localStorage.removeItem('displayName')
   localStorage.removeItem('username')
+  localStorage.removeItem('role')
   router.push('/login')
 }
 </script>

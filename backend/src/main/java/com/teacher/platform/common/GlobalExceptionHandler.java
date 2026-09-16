@@ -9,6 +9,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    /** 非管理员访问管理接口：业务码 403 */
+    @ExceptionHandler(AdminRequiredException.class)
+    public Result<Void> handleAdminRequired(AdminRequiredException e) {
+        return Result.fail(403, e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public Result<Void> handle(Exception e) {
         e.printStackTrace();

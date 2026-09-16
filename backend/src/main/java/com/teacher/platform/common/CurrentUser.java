@@ -16,4 +16,13 @@ public final class CurrentUser {
         if (o == null) return null;
         return ((Number) o).longValue();
     }
+
+    /**
+     * 安全读取 sys_user.enabled：MySQL 驱动对 TINYINT(1) 默认返回 Boolean，
+     * 换驱动/连接参数时也可能是 Integer（0/1），两种都兼容。
+     */
+    public static boolean isEnabled(Object o) {
+        if (o instanceof Boolean b) return b;
+        return o instanceof Number n && n.intValue() == 1;
+    }
 }

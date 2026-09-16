@@ -64,6 +64,7 @@ function saveAuth(data) {
   localStorage.setItem('token', data.token)
   localStorage.setItem('displayName', data.displayName)
   localStorage.setItem('username', data.username || '')
+  localStorage.setItem('role', data.role || 'TEACHER')
   router.push('/dashboard')
 }
 

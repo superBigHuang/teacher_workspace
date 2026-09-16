@@ -74,7 +74,8 @@ public class AuthController {
         }
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
-                    "SELECT id,username,password_hash,display_name FROM sys_user WHERE username=?", username);
+                    "SELECT id,username,password_hash,display_name,role,enabled,source " +
+                            "FROM sys_user WHERE username=?", username);
             boolean userMissing = list.isEmpty();
             boolean pwdWrong = userMissing ||
                     !encoder.matches(password, (String) list.get(0).get("password_hash"));
@@ -86,11 +87,25 @@ public class AuthController {
                         : "账号或密码错误";   // 统一文案，不区分账号不存在/密码错误，防账号枚举
                 return Result.fail(401, msg, failData(username, ip, nowLocked));
             }
-            captchaService.onSuccess(username, ip);
             Map<String, Object> user = list.get(0);
+            // 密码正确但账号已停用：明确提示（不计失败次数）
+            if (!CurrentUser.isEnabled(user.get("enabled"))) {
+                return Result.fail(401, "账号已停用，请联系管理员");
+            }
+            captchaService.onSuccess(username, ip);
+            // 记录最近登录时间
+            jdbc.update("UPDATE sys_user SET last_login_at=NOW() WHERE id=?", user.get("id"));
             String dn = user.get("display_name") == null ? username : (String) user.get("display_name");
             String token = jwtUtil.generate(((Number) user.get("id")).longValue(), username);
-            return Result.ok(Map.of("token", token, "displayName", dn, "username", username));
+            // 角色/状态/渠道随登录响应返回，前端据此控制用户管理入口
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", token);
+            data.put("displayName", dn);
+            data.put("username", username);
+            data.put("role", String.valueOf(user.get("role")));
+            data.put("enabled", true);
+            data.put("source", user.get("source"));
+            return Result.ok(data);
         } catch (Exception e) {
             log.error("登录查询失败：{}", e.getMessage(), e);
             return Result.fail("登录失败，请稍后重试");
@@ -126,12 +141,13 @@ public class AuthController {
         return req.getRemoteAddr();
     }
 
-    /** 当前登录账号信息 */
+    /** 当前登录账号信息（含角色/状态/渠道，前端据此控制用户管理入口） */
     @GetMapping("/me")
     public Result<Map<String, Object>> me(HttpServletRequest req) {
         Long uid = CurrentUser.uid(req);
         Map<String, Object> u = jdbc.queryForMap(
-                "SELECT username, display_name displayName, email, school FROM sys_user WHERE id=?", uid);
+                "SELECT username, display_name displayName, email, school, role, enabled, source " +
+                        "FROM sys_user WHERE id=?", uid);
         return Result.ok(u);
     }
 

@@ -315,6 +315,7 @@ async function doLogin() {
     localStorage.setItem('token', r.token)
     localStorage.setItem('displayName', r.displayName)
     localStorage.setItem('username', r.username || '')
+    localStorage.setItem('role', r.role || 'TEACHER')
     token.value = r.token
     loginForm.value.password = ''
     boot()
