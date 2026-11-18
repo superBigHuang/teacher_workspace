@@ -215,7 +215,7 @@ public class DemoDataSeeder {
                     "SELECT id, name FROM subject WHERE user_id=1");
             if (!periodList.isEmpty() && !subjList.isEmpty()) {
                 List<Map<String, Object>> teachPeriods = periodList.stream()
-                        .filter(p -> ((Number) p.get("is_break")).intValue() == 0).toList();
+                        .filter(p -> isZero(p.get("is_break"))).toList();
                 List<Map<String, Object>> teached = subjList.stream()
                         .filter(s -> !"自习".equals(s.get("name"))).toList();
                 Map<String, Object> studySubj = subjList.stream()
@@ -344,6 +344,13 @@ public class DemoDataSeeder {
             jdbc.update("INSERT INTO pet(user_id,student_id,pet_key,pet_name,level,exp,adopted_at,graduated_count,hatched) " +
                     "VALUES(1,?,'dragon',?,?,?,NOW(),0,1)", sid, pname, lv, exp);
         }
+    }
+
+    private boolean isZero(Object o) {
+        if (o == null) return true;
+        if (o instanceof Boolean b) return !b;
+        if (o instanceof Number n) return n.intValue() == 0;
+        return "0".equals(String.valueOf(o).trim()) || "false".equalsIgnoreCase(String.valueOf(o).trim());
     }
 
     private Integer count(String sql) {
