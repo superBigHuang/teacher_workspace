@@ -1,5 +1,6 @@
 package com.teacher.platform.config;
 
+import com.teacher.platform.config.datasource.DataSourceContext;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -39,12 +40,30 @@ public class DataInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        migrate();
-        seedGlobalPeriods();
-        seedGlobalRules();
-        seedBuiltinAchievements();
-        seedBuiltinSkin();
-        seedAdmin();
+        // 1. 正式库初始化
+        DataSourceContext.set(DataSourceContext.MASTER);
+        try {
+            migrate();
+            seedGlobalPeriods();
+            seedGlobalRules();
+            seedBuiltinAchievements();
+            seedBuiltinSkin();
+            seedAdmin();
+        } finally {
+            DataSourceContext.clear();
+        }
+
+        // 2. 测试沙箱库初始化（表迁移 + 全局模板）
+        DataSourceContext.set(DataSourceContext.DEMO);
+        try {
+            migrate();
+            seedGlobalPeriods();
+            seedGlobalRules();
+            seedBuiltinAchievements();
+            seedBuiltinSkin();
+        } finally {
+            DataSourceContext.clear();
+        }
     }
 
     // ---------- 迁移 ----------

@@ -81,11 +81,14 @@ public class DynamicDataSourceConfig {
 
     /** 幂等初始化 demo 测试库的表结构 */
     private void initDemoSchema(DataSource demoDataSource) {
-        try {
+        try (var conn = demoDataSource.getConnection();
+             var stmt = conn.createStatement()) {
+            stmt.execute("CREATE DATABASE IF NOT EXISTS teacher_workspace_demo DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
+            stmt.execute("USE teacher_workspace_demo");
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
             populator.addScript(new ClassPathResource("schema.sql"));
             populator.setContinueOnError(true);
-            populator.execute(demoDataSource);
+            populator.populate(conn);
             log.info("【动态数据源】测试库 teacher_workspace_demo 表结构 schema.sql 初始化完毕");
         } catch (Exception e) {
             log.warn("【动态数据源】测试库 schema.sql 执行异常（若表已存在可忽略）：{}", e.getMessage());

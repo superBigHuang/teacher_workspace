@@ -1,6 +1,5 @@
 -- 班主任工作平台 建库建表脚本（幂等）
-CREATE DATABASE IF NOT EXISTS teacher_workspace DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-USE teacher_workspace;
+-- 数据库名由连接指定，不再硬编码 USE，以便动态多库（正式库/测试沙箱库）复用建表
 
 -- 用户（多老师账号；数据按 user_id 隔离）
 CREATE TABLE IF NOT EXISTS sys_user (
