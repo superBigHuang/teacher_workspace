@@ -44,6 +44,7 @@ e2e/playwright-report/
 # ===== 操作系统 =====
 .DS_Store
 Thumbs.db
+*.zip
 
 # ===== 本地环境覆盖配置（按需）=====
 application-local.yml

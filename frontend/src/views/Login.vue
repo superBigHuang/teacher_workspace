@@ -14,6 +14,17 @@
         <p class="sub">欢迎回来，今天也要开心呀～</p>
       </div>
 
+      <!-- 测试体验区提示卡片 -->
+      <div v-if="isDemo" class="demo-banner">
+        <div class="demo-badge">🌟 测试体验区 (Dev/Demo)</div>
+        <p class="demo-desc">已自动填入体验账号，点击下方按钮即可进入体验！本区数据随时可能重置，请勿录入真实隐私数据。</p>
+        <div class="demo-actions">
+          <span class="demo-link" @click="fillDemo">一键预填账号</span>
+          <span class="demo-sep">|</span>
+          <span class="demo-link" @click="clearForm">清空表单</span>
+        </div>
+      </div>
+
       <!-- 登录（自助注册已下线，账号请联系管理员开通） -->
       <div class="form">
         <el-input v-model="loginForm.username" size="large" placeholder="账号" :prefix-icon="User" class="field" />
@@ -35,15 +46,31 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
-import http from '../api/http'
+import http, { checkIsDemo } from '../api/http'
 
 const router = useRouter()
 const loading = ref(false)
-const loginForm = reactive({ username: '', password: '' })
+const isDemo = ref(checkIsDemo())
+
+// 测试体验区默认自动填入 admin / 123456；正式区默认留空
+const loginForm = reactive({
+  username: isDemo.value ? 'admin' : '',
+  password: isDemo.value ? '123456' : ''
+})
+
+function fillDemo() {
+  loginForm.username = 'admin'
+  loginForm.password = '123456'
+}
+
+function clearForm() {
+  loginForm.username = ''
+  loginForm.password = ''
+}
 
 // 验证码（失败 3 次后由后端 needCaptcha 拉起）
 const needCaptcha = ref(false)
@@ -128,6 +155,46 @@ async function login() {
 }
 h2 { margin: 10px 0 4px; color: #6b5b73; font-size: 22px; letter-spacing: 1px; }
 .sub { color: #b7a6b8; margin: 0 0 20px; font-size: 13px; }
+
+/* 测试体验区提示卡片 */
+.demo-banner {
+  background: linear-gradient(135deg, #fff9e6, #fff0f5);
+  border: 1.5px dashed #f5c065;
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  text-align: left;
+}
+.demo-badge {
+  font-size: 13px;
+  font-weight: 800;
+  color: #b7791f;
+  margin-bottom: 4px;
+}
+.demo-desc {
+  font-size: 12px;
+  color: #7c6f58;
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+.demo-actions {
+  font-size: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.demo-link {
+  color: #e28743;
+  cursor: pointer;
+  font-weight: bold;
+}
+.demo-link:hover {
+  text-decoration: underline;
+  color: #d97724;
+}
+.demo-sep {
+  color: #e2cbb5;
+}
 
 .field { margin-bottom: 14px; }
 .captcha-row { display: flex; gap: 10px; align-items: center; }

@@ -5,12 +5,22 @@ spring:
   application:
     name: teacher-workplatform
   datasource:
-    # 直接指定库名；createDatabaseIfNotExist=true 使库不存在时驱动自动建库，
-    # 并保证连接池中每个连接都有默认库（否则仅 schema.sql 那条连接 USE 过库，新连接会报 No database selected）
+    # 默认/正式库配置 (master: teacher_workspace)
     url: jdbc:mysql://localhost:3306/teacher_workspace?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
+    master:
+      jdbc-url: ${MASTER_DB_URL:jdbc:mysql://localhost:3306/teacher_workspace?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+      username: ${MASTER_DB_USER:root}
+      password: ${MASTER_DB_PWD:root}
+      driver-class-name: com.mysql.cj.jdbc.Driver
+    # 独立测试沙箱库配置 (demo: teacher_workspace_demo)
+    demo:
+      jdbc-url: ${DEMO_DB_URL:jdbc:mysql://localhost:3306/teacher_workspace_demo?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+      username: ${DEMO_DB_USER:root}
+      password: ${DEMO_DB_PWD:root}
+      driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
       mode: always

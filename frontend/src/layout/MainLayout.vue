@@ -67,6 +67,18 @@
 
     <!-- 内容区 -->
     <main class="content">
+      <!-- 测试体验区常驻横幅 -->
+      <div v-if="isDemo" class="global-demo-banner">
+        <div class="banner-left">
+          <span class="banner-badge">⚠️ 测试体验区</span>
+          <span class="banner-text">本区数据随时可能被重置，仅供体验系统，请勿录入真实业务与隐私数据！{{ remainText }}</span>
+        </div>
+        <div class="banner-right">
+          <el-button size="small" type="warning" plain round :loading="resetting" @click="handleResetDemo">
+            🔄 一键恢复初始数据
+          </el-button>
+        </div>
+      </div>
       <router-view />
     </main>
 
@@ -89,12 +101,49 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
-import http from '../api/http'
+import http, { checkIsDemo } from '../api/http'
 import { startRemote, stopRemote, onRemoteCmd } from '../composables/useRemote'
 import { playHeld, currentEvolve, onEvolveDone } from '../composables/usePets'
 import EvolutionShow from '../components/EvolutionShow.vue'
+
+// 测试体验区判定与状态
+const isDemo = ref(checkIsDemo())
+const remainText = ref('')
+const resetting = ref(false)
+
+async function fetchDemoStatus() {
+  if (!isDemo.value) return
+  try {
+    const s = await http.get('/auth/demo/status')
+    if (s && s.remainDays) {
+      remainText.value = `（距下次自动重置约 ${s.remainDays} 天）`
+    }
+  } catch (e) {}
+}
+
+async function handleResetDemo() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要将测试库重置为标准初始化数据（50名学生、课表、成绩等）吗？当前在测试库所做的临时修改将被清空。',
+      '重置确认',
+      { confirmButtonText: '确定重置', cancelButtonText: '取消', type: 'warning' }
+    )
+    resetting.value = true
+    await http.post('/auth/demo/reset')
+    ElMessage.success('测试体验库已成功恢复为初始数据！')
+    setTimeout(() => {
+      window.location.reload()
+    }, 800)
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '重置失败')
+    }
+  } finally {
+    resetting.value = false
+  }
+}
 
 /** 可选头像 emoji（动物/笑脸/职业，马卡龙风格） */
 const AVATARS = [
@@ -132,6 +181,8 @@ onMounted(async () => {
     const p = await http.get('/settings/profile')
     if (p.avatar) { avatar.value = p.avatar; localStorage.setItem('avatar', p.avatar) }
   } catch (e) { /* 未登录等情况忽略 */ }
+  // 测试区状态拉取
+  fetchDemoStatus()
   // 启动手机遥控 SSE 通道（投影场景：手机发指令，PC 执行）
   startRemote()
   offRemote = onRemoteCmd(handleRemoteCmd)
@@ -293,6 +344,44 @@ nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .sidebar.collapsed .user-card { justify-content: center; }
 .sidebar.collapsed .action-item { justify-content: center; }
 .content { flex: 1; padding: 22px 26px 40px; overflow: auto; }
+
+/* 测试体验区顶部常驻横幅 */
+.global-demo-banner {
+  background: linear-gradient(135deg, #fffbeb 0%, #fff7ed 100%);
+  border: 1.5px solid #fed7aa;
+  border-radius: 14px;
+  padding: 10px 18px;
+  margin-bottom: 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.08);
+}
+.banner-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.banner-badge {
+  background: #fef3c7;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid #fde68a;
+}
+.banner-text {
+  font-size: 13px;
+  color: #92400e;
+  font-weight: 500;
+}
+.banner-right {
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
 /* ICP 备案号：全站底部固定居中 */
 .beian {
   position: fixed; bottom: 8px; left: 212px; right: 0; z-index: 200;

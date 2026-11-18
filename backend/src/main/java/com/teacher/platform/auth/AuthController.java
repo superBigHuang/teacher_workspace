@@ -3,6 +3,8 @@ package com.teacher.platform.auth;
 import com.teacher.platform.common.CurrentUser;
 import com.teacher.platform.common.JwtUtil;
 import com.teacher.platform.common.Result;
+import com.teacher.platform.config.datasource.DataSourceContext;
+import com.teacher.platform.service.DemoDataSeeder;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 登录 / 当前账号 / 修改密码
- * （自助注册已下线：账号由管理员后台建号，/register 端点已移除）
+ * 登录 / 当前账号 / 修改密码 / 测试区重置
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -28,16 +29,18 @@ public class AuthController {
     private final JdbcTemplate jdbc;
     private final JwtUtil jwtUtil;
     private final CaptchaService captchaService;
+    private final DemoDataSeeder demoDataSeeder;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     /** 是否处在可信反向代理之后：true 才采信代理头取客户端 IP，防止直连时伪造 XFF 绕过失败计数 */
     @Value("${app.trust-proxy:false}")
     private boolean trustProxy;
 
-    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil, CaptchaService captchaService) {
+    public AuthController(JdbcTemplate jdbc, JwtUtil jwtUtil, CaptchaService captchaService, DemoDataSeeder demoDataSeeder) {
         this.jdbc = jdbc;
         this.jwtUtil = jwtUtil;
         this.captchaService = captchaService;
+        this.demoDataSeeder = demoDataSeeder;
     }
 
     /** 登录验证码（字符图形码）：公开端点，失败达阈值后登录须携带 */
@@ -164,6 +167,51 @@ public class AuthController {
         }
         jdbc.update("UPDATE sys_user SET password_hash=? WHERE id=?", encoder.encode(newPwd), uid);
         return Result.ok();
+    }
+
+    /**
+     * 获取测试体验区状态（是否为测试区、上次重置时间、距下次重置还剩天数）
+     */
+    @GetMapping("/demo/status")
+    public Result<Map<String, Object>> demoStatus() {
+        boolean isDemo = DataSourceContext.isDemo();
+        Map<String, Object> data = new HashMap<>();
+        data.put("isDemo", isDemo);
+        if (isDemo) {
+            long last = demoDataSeeder.getLastResetTime();
+            long now = System.currentTimeMillis();
+            long elapsed = now - last;
+            long remainMs = Math.max(0, DemoDataSeeder.RESET_INTERVAL_MS - elapsed);
+            long remainDays = (remainMs + 86399999L) / (24 * 3600 * 1000L);
+            data.put("lastResetTime", last);
+            data.put("remainDays", Math.max(1, remainDays));
+            data.put("canReset", elapsed >= DemoDataSeeder.COOLDOWN_MS);
+            data.put("cooldownSec", Math.max(0, (DemoDataSeeder.COOLDOWN_MS - elapsed) / 1000));
+        }
+        return Result.ok(data);
+    }
+
+    /**
+     * 一键恢复测试库初始数据（仅限在测试区执行，正式环境绝对拒绝）
+     */
+    @PostMapping("/demo/reset")
+    public Result<String> resetDemoData() {
+        if (!DataSourceContext.isDemo()) {
+            return Result.fail(403, "正式生产环境禁止执行重置操作！");
+        }
+        try {
+            boolean ok = demoDataSeeder.reset(false);
+            if (ok) {
+                return Result.ok("测试库已成功恢复为初始高保真演示数据！");
+            } else {
+                return Result.fail("当前已有重置任务在执行中，请稍候");
+            }
+        } catch (IllegalStateException e) {
+            return Result.fail(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("测试库重置失败：{}", e.getMessage(), e);
+            return Result.fail("重置失败：" + e.getMessage());
+        }
     }
 
     private String str(Object o) {
